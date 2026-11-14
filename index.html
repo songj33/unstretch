@@ -1,0 +1,1461 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>还原尺</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=ZCOOL+QingKe+HuangYou&display=swap" rel="stylesheet">
+<style>
+:root {
+  /* layout idea: a measuring bench. Dark viewing stage on the left with a pixel ruler,
+     a narrow instrument panel on the right; vermilion is reserved for measurement marks. */
+  --bg: #eceef2;
+  --panel: #f8f9fb;
+  --ink: #161920;
+  --muted: #5a6270;
+  --line: #d3d8e0;
+  --accent: #d2341c;
+  --accent-ink: #ffffff;
+  --stage: #1b1e25;
+  --stage-ink: #c9cfda;
+  --good: #1d7a4c;
+  --warn: #a35f00;
+  --chip: #e3e7ee;
+  --font-display: "ZCOOL QingKe HuangYou", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-body: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", system-ui, sans-serif;
+  --font-num: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #121418; --panel: #1a1d24; --ink: #e7e9ee; --muted: #98a1b0; --line: #2c313b;
+    --accent: #ff5b3d; --accent-ink: #1a0b07; --stage: #0b0c10; --stage-ink: #aab2c0;
+    --good: #4ec48a; --warn: #e0a040; --chip: #262b35;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #121418; --panel: #1a1d24; --ink: #e7e9ee; --muted: #98a1b0; --line: #2c313b;
+  --accent: #ff5b3d; --accent-ink: #1a0b07; --stage: #0b0c10; --stage-ink: #aab2c0;
+  --good: #4ec48a; --warn: #e0a040; --chip: #262b35;
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--ink); font: 14px/1.55 var(--font-body); padding: 18px 20px 28px; }
+button, input, select { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.top { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 18px; margin-bottom: 14px; }
+.top h1 { font: 400 40px/1 var(--font-display); letter-spacing: .06em; margin: 0; }
+.top h1 span { color: var(--accent); }
+.lede { margin: 0; max-width: 46em; color: var(--muted); text-wrap: balance; }
+.privacy { margin: 0 0 0 auto; font-size: 12px; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; }
+
+.bench { display: grid; grid-template-columns: minmax(0, 1fr) 348px; gap: 16px; align-items: start; }
+@media (max-width: 900px) { .bench { grid-template-columns: minmax(0, 1fr); } .privacy { margin-left: 0; } }
+
+.stage { background: var(--stage); color: var(--stage-ink); border-radius: 10px; padding: 12px 14px 14px; min-width: 0; }
+.stage.drop { outline: 2px dashed var(--accent); outline-offset: -6px; }
+.views { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-start; justify-content: center; }
+.fig { margin: 0; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.fig figcaption { font-size: 12px; letter-spacing: .04em; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.fig figcaption b { color: #fff; font-weight: 600; }
+.viewwrap { display: flex; align-items: flex-start; }
+#ruler { flex: none; display: block; }
+#view { display: block; touch-action: none; cursor: crosshair; background: #000; }
+#out { display: block; background: #000; margin-left: 0; }
+.tag { font-size: 11px; padding: 1px 7px; border-radius: 3px; background: rgba(255,255,255,.1); color: #dfe4ec; }
+.tag.demo { background: var(--accent); color: var(--accent-ink); }
+
+.hint { margin-top: 10px; min-height: 22px; font-size: 13px; color: #e9edf3; }
+.hint.warn { color: #ffc266; }
+.transport { margin-top: 8px; display: flex; gap: 10px; align-items: center; }
+.transport input[type=range] { flex: 1; min-width: 0; accent-color: var(--accent); }
+.transport .t { font: 12px var(--font-num); font-variant-numeric: tabular-nums; }
+.transport button { background: rgba(255,255,255,.1); border: 1px solid rgba(255,255,255,.2); color: #fff; border-radius: 6px; padding: 4px 12px; cursor: pointer; }
+
+.panel { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+.card h2 { margin: 0; font-size: 13px; font-weight: 600; letter-spacing: .08em; color: var(--muted); display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.card h2 small { font-weight: 400; letter-spacing: 0; }
+
+.readout { display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap; }
+.kbig { font: 400 62px/0.9 var(--font-display); color: var(--accent); font-variant-numeric: tabular-nums; letter-spacing: .02em; }
+.kbig small { font-size: 22px; color: var(--muted); margin-right: 6px; }
+.kmeta { flex: 1; min-width: 150px; font-size: 13px; }
+.kmeta .src { color: var(--muted); font-size: 12px; }
+.state { display: inline-block; font-size: 11px; padding: 1px 8px; border-radius: 999px; background: var(--chip); color: var(--muted); margin-bottom: 3px; }
+.state.backed { background: color-mix(in srgb, var(--good) 18%, transparent); color: var(--good); }
+.state.prior { background: color-mix(in srgb, var(--warn) 20%, transparent); color: var(--warn); }
+
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.row label { color: var(--muted); font-size: 12px; }
+.row input[type=range] { flex: 1; min-width: 90px; accent-color: var(--accent); }
+.num { width: 76px; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); font: 13px var(--font-num); font-variant-numeric: tabular-nums; }
+select.num { width: auto; font-family: var(--font-body); }
+.check { display: flex; gap: 6px; align-items: center; font-size: 13px; }
+.check input { accent-color: var(--accent); }
+
+.btn { border: 1px solid var(--line); background: var(--bg); border-radius: 7px; padding: 6px 10px; cursor: pointer; font-size: 13px; text-align: left; }
+.btn:hover { border-color: var(--muted); }
+.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; text-align: center; }
+.btn.on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.btn[disabled] { opacity: .5; cursor: not-allowed; }
+.tools { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.tools .btn small { display: block; color: var(--muted); font-size: 11px; line-height: 1.3; }
+.wide { grid-column: 1 / -1; }
+
+.list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.item { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; gap: 8px; align-items: start; padding: 7px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
+.item.adopted { border-color: var(--accent); }
+.item .n { width: 20px; height: 20px; border-radius: 50%; background: var(--ink); color: var(--panel); font: 11px/20px var(--font-num); text-align: center; }
+.item.cand .n { background: transparent; color: var(--ink); border: 1px dashed var(--muted); line-height: 18px; }
+.item .what { font-size: 13px; overflow-wrap: anywhere; }
+.item .what small { display: block; color: var(--muted); font-size: 12px; line-height: 1.4; }
+.item .kv { font: 600 15px var(--font-num); font-variant-numeric: tabular-nums; color: var(--accent); }
+.item .acts { display: flex; flex-direction: column; gap: 4px; align-items: flex-end; }
+.mini { font-size: 12px; padding: 2px 8px; border-radius: 5px; border: 1px solid var(--line); background: var(--panel); cursor: pointer; white-space: nowrap; }
+.mini:hover { border-color: var(--accent); }
+.mini.x { border: none; background: none; color: var(--muted); padding: 0 4px; }
+.empty { color: var(--muted); font-size: 12.5px; margin: 0; }
+.fine { color: var(--muted); font-size: 12px; margin: 0; }
+.fine b { color: var(--ink); font-weight: 600; }
+details summary { cursor: pointer; color: var(--muted); font-size: 12.5px; }
+details ul { margin: 6px 0 0; padding-left: 18px; color: var(--muted); font-size: 12.5px; }
+input[type=file] { display: none; }
+
+</style>
+</head>
+<body>
+<header class="top">
+  <h1>还原<span>尺</span></h1>
+  <p class="lede">拉腿特效把画面下半截整条拉长，背景也跟着变形。在画面里找一把尺子，量出拉了多少倍，再压回去。</p>
+  <p class="privacy">文件只在本机浏览器里处理，不上传</p>
+</header>
+
+<main class="bench">
+  <section class="stage" id="stage" aria-label="画面">
+    <div class="views" id="views">
+      <figure class="fig">
+        <figcaption><b>原画面</b><span>在这里拖分界线、框参照物</span><span class="tag demo" id="demoTag" hidden>示例：程序生成，下半截被拉长了 1.45 倍</span></figcaption>
+        <div class="viewwrap"><canvas id="ruler" aria-hidden="true"></canvas><canvas id="view" aria-label="原画面，可拖动分界线"></canvas></div>
+      </figure>
+      <figure class="fig">
+        <figcaption><b>还原预览</b><span class="tag">估计值，不是原片</span></figcaption>
+        <canvas id="out" aria-label="还原预览"></canvas>
+      </figure>
+    </div>
+    <div class="hint" id="hint" role="status" aria-live="polite"></div>
+    <div class="transport" id="transport" hidden>
+      <button type="button" id="playBtn">播放</button>
+      <input type="range" id="seek" min="0" max="1000" value="0" aria-label="视频进度">
+      <span class="t" id="timeTxt">0:00 / 0:00</span>
+    </div>
+  </section>
+
+  <aside class="panel">
+    <section class="card">
+      <div class="readout">
+        <div class="kbig" id="kBig"><small>×</small>1.00</div>
+        <div class="kmeta">
+          <span class="state" id="kState">手动</span>
+          <div id="kWords">还没有估计</div>
+          <div class="src" id="kSrc"></div>
+        </div>
+      </div>
+      <div class="row">
+        <label for="kRange">拉伸倍数</label>
+        <input type="range" id="kRange" min="0.6" max="2.4" step="0.005" value="1">
+        <input class="num" type="number" id="kNum" min="0.4" max="4" step="0.01" value="1.00" aria-label="拉伸倍数">
+      </div>
+      <div class="row">
+        <label for="y0Num">分界线 y</label>
+        <input class="num" type="number" id="y0Num" min="0" step="1" value="0">
+        <label class="check"><input type="checkbox" id="toBottom" checked>拉到画面底部</label>
+        <input class="num" type="number" id="y1Num" min="0" step="1" value="0" aria-label="拉伸带下边界 y" hidden>
+      </div>
+      <div class="row">
+        <button type="button" class="btn primary" id="openBtn">打开图片或视频</button>
+        <button type="button" class="btn" id="demoBtn">载入示例</button>
+        <input type="file" id="file" accept="image/*,video/*">
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>找参照物</h2>
+      <button type="button" class="btn primary" id="autoBtn">一键估计：分界线、人体、参照物</button>
+      <p class="fine" id="poseState">人体识别：第一次点“一键估计”时加载模型</p>
+      <button type="button" class="btn" id="scanBtn" style="text-align:center">只按当前分界线找参照物</button>
+      <div class="tools">
+        <button type="button" class="btn" id="toolRect" data-mode="rect">框一个方形<small>插座、瓷砖、正对镜头的方块</small></button>
+        <button type="button" class="btn" id="toolEllipse" data-mode="ellipse">框一个圆<small>球体最可靠</small></button>
+        <button type="button" class="btn" id="toolGap" data-mode="gap">量两段间距<small>砖缝、栏杆：上面一段，下面一段</small></button>
+        <button type="button" class="btn" id="toolBody" data-mode="body">人体比例<small>点头顶、关节、脚底</small></button>
+        <button type="button" class="btn wide" id="toolCrop" data-mode="crop">只留一块画面<small>画中画、拼接的视频：先框出被拉伸的那一块</small></button>
+        <button type="button" class="btn wide" id="uncrop" hidden>恢复整幅画面</button>
+      </div>
+      <div class="row">
+        <label for="trueRatio">参照物真实的 高÷宽</label>
+        <input class="num" type="number" id="trueRatio" min="0.1" max="10" step="0.01" value="1.00">
+        <label class="check"><input type="checkbox" id="snap" checked>吸附边缘</label>
+      </div>
+      <div class="row">
+        <label for="joint">人体比例用的关节</label>
+        <select class="num" id="joint"><option value="knee">膝盖中心</option><option value="crotch">裆部</option></select>
+      </div>
+      <label class="check" id="trackRow" hidden><input type="checkbox" id="track">分界线跟随人体（实验，针对跟踪特效）</label>
+      <ul class="list" id="candList" aria-label="候选参照物"></ul>
+    </section>
+
+    <section class="card">
+      <h2>依据 <small id="evCount"></small></h2>
+      <ul class="list" id="evList"></ul>
+      <p class="empty" id="evEmpty">还没有依据。先把分界线拖到胯部附近，再找参照物。</p>
+      <details>
+        <summary>每种依据有多可靠</summary>
+        <ul>
+          <li>重复结构（砖缝、瓷砖）：多条竖带互相印证时最可靠。</li>
+          <li>球体：从任何角度看都是圆，可靠。圆盘和方块要正对镜头才算数。</li>
+          <li>人体比例：只是人群统计，不是证据。仰拍和厚底鞋会让结果偏大，天生腿长的人会被误判。</li>
+          <li>自动识别的人体点：模型见惯了正常比例，会把被拉长的腿“认短”，所以自动结果偏保守，拖准脚底点更可信。</li>
+        </ul>
+      </details>
+    </section>
+
+    <section class="card">
+      <h2>导出</h2>
+      <div class="row">
+        <button type="button" class="btn" id="savePng">保存当前画面 PNG</button>
+        <button type="button" class="btn" id="saveVid" hidden>录制还原视频</button>
+      </div>
+      <p class="fine" id="exportMsg">导出的是按估计倍数压回去的画面，请连同依据一起说明，不要当作原片。</p>
+    </section>
+  </aside>
+</main>
+
+<script>
+/* 还原尺 unstretch — Copyright (C) 2026 songj33
+   SPDX-License-Identifier: GPL-3.0-only */
+/* 还原尺 core — pure functions, no DOM. Works in browsers and Node.
+   Model: a leg-stretch filter is a 1-D row remap. Rows above y0 are untouched,
+   rows in [y0, y1) were stretched vertically by k. Everything here estimates k. */
+(function (root) {
+  "use strict";
+  var AF = {};
+
+  AF.gray = function (rgba, w, h) {
+    var g = new Float32Array(w * h);
+    for (var i = 0, j = 0; i < g.length; i++, j += 4)
+      g[i] = 0.299 * rgba[j] + 0.587 * rgba[j + 1] + 0.114 * rgba[j + 2];
+    return g;
+  };
+
+  /* Two box passes of radius r: close to a Gaussian with sigma ~ 0.8*r+0.4 */
+  AF.blur = function (src, w, h, r) {
+    if (r < 1) return new Float32Array(src);
+    var a = new Float32Array(src), b = new Float32Array(w * h), n = 2 * r + 1, x, y, s, i;
+    for (var pass = 0; pass < 2; pass++) {
+      for (y = 0; y < h; y++) {
+        s = 0; var row = y * w;
+        for (i = -r; i <= r; i++) s += a[row + Math.min(w - 1, Math.max(0, i))];
+        for (x = 0; x < w; x++) {
+          b[row + x] = s / n;
+          s += a[row + Math.min(w - 1, x + r + 1)] - a[row + Math.max(0, x - r)];
+        }
+      }
+      for (x = 0; x < w; x++) {
+        s = 0;
+        for (i = -r; i <= r; i++) s += b[Math.min(h - 1, Math.max(0, i)) * w + x];
+        for (y = 0; y < h; y++) {
+          a[y * w + x] = s / n;
+          s += b[Math.min(h - 1, y + r + 1) * w + x] - b[Math.max(0, y - r) * w + x];
+        }
+      }
+    }
+    return a;
+  };
+
+  /* ---------- the mapping ---------- */
+  /* stretched y -> original y */
+  AF.unmapY = function (y, p) {
+    if (y <= p.y0) return y;
+    if (y <= p.y1) return p.y0 + (y - p.y0) / p.k;
+    return p.y0 + (p.y1 - p.y0) / p.k + (y - p.y1);
+  };
+  AF.restoredHeight = function (h, p) { return AF.unmapY(h, p); };
+
+  /* ---------- cue 1: repeating structure (bricks, tiles, railings) ---------- */
+  /* Dominant vertical period of a column strip between rows ya..yb.
+     Returns {period, snr}; snr = spectral peak / median amplitude. */
+  AF.periodScan = function (g, w, h, x0, x1, ya, yb) {
+    x0 = Math.max(0, x0 | 0); x1 = Math.min(w, x1 | 0);
+    ya = Math.max(1, ya | 0); yb = Math.min(h - 1, yb | 0);
+    var n = yb - ya, cols = x1 - x0;
+    if (n < 60 || cols < 8) return null;
+    var p = new Float32Array(n), mean = 0, i, x;
+    for (i = 0; i < n; i++) {
+      var y = ya + i, up = (y - 1) * w, dn = (y + 1) * w, s = 0;
+      for (x = x0; x < x1; x++) s += Math.abs(g[dn + x] - g[up + x]);
+      p[i] = s / cols; mean += p[i];
+    }
+    mean /= n;
+    for (i = 0; i < n; i++) p[i] = (p[i] - mean) * (0.5 - 0.5 * Math.cos((2 * Math.PI * i) / (n - 1)));
+    var pmin = 5, pmax = Math.min(48, n / 4);
+    if (pmax <= pmin + 1) return null;
+    var F = 320, f0 = 1 / pmax, f1 = 1 / pmin, amp = new Float32Array(F), best = 0;
+    for (var k = 0; k < F; k++) {
+      var f = f0 + ((f1 - f0) * k) / (F - 1), re = 0, im = 0, wv = 2 * Math.PI * f;
+      for (i = 0; i < n; i++) { re += p[i] * Math.cos(wv * i); im -= p[i] * Math.sin(wv * i); }
+      amp[k] = Math.sqrt(re * re + im * im);
+      if (amp[k] > amp[best]) best = k;
+    }
+    var sorted = Array.prototype.slice.call(amp).sort(function (a, b) { return a - b; });
+    var med = sorted[F >> 1] || 1e-9, d = 0;
+    if (best > 0 && best < F - 1) {
+      var a = amp[best - 1], b = amp[best], c = amp[best + 1], den = a - 2 * b + c;
+      if (den !== 0) d = (0.5 * (a - c)) / den;
+    }
+    var fpk = f0 + ((f1 - f0) * (best + d)) / (F - 1);
+    return { period: 1 / fpk, snr: amp[best] / med, edge: best === 0 || best === F - 1 };
+  };
+
+  function blocky(p) { return [8, 16, 32].some(function (b) { return Math.abs(p / b - 1) < 0.025; }); }
+  /* Compare the period just above the boundary with the period just below it, strip by strip. */
+  AF.findRepeatCandidates = function (g, w, h, y0, y1) {
+    var win = Math.max(130, Math.round(h * 0.17)), m = 6;
+    /* narrow strips: on a wide frame the clean patch of wall may be small */
+    var sw = Math.min(80, Math.max(40, Math.round(w / 8))), step = Math.max(20, sw >> 1), out = [];
+    for (var x0 = 0; x0 + sw <= w; x0 += step) {
+      var ua = Math.max(0, y0 - m - win), ub = y0 - m, da = y0 + m, db = Math.min(y1, y0 + m + win);
+      var up = AF.periodScan(g, w, h, x0, x0 + sw, ua, ub);
+      var dn = AF.periodScan(g, w, h, x0, x0 + sw, da, db);
+      if (!up || !dn || up.edge || dn.edge) continue;
+      if (up.snr < 4 || dn.snr < 4) continue;
+      // 8/16/32 px in both windows is the video codec's block grid, not a texture
+      if (blocky(up.period) && blocky(dn.period)) continue;
+      var k = dn.period / up.period;
+      if (k < 0.75 || k > 2.6) continue;
+      out.push({ type: "repeat", x0: x0, x1: x0 + sw, ua: ua, ub: ub, da: da, db: db,
+                 pUp: up.period, pDown: dn.period, snr: Math.min(up.snr, dn.snr), k: k });
+    }
+    out.forEach(function (c) {
+      c.support = out.filter(function (o) { return Math.abs(o.k / c.k - 1) < 0.06; }).length;
+    });
+    out.sort(function (a, b) { return b.support - a.support || b.snr - a.snr; });
+    var consensus = null;
+    if (out.length && out[0].support >= 2) {
+      var grp = out.filter(function (o) { return Math.abs(o.k / out[0].k - 1) < 0.06; })
+                   .map(function (o) { return o.k; }).sort(function (a, b) { return a - b; });
+      consensus = { k: grp[grp.length >> 1], n: grp.length, lo: grp[0], hi: grp[grp.length - 1] };
+    }
+    /* strips that agree within 6% form a cluster; several clusters = the frame is not one piece */
+    var byK = out.slice().sort(function (a, b) { return a.k - b.k; }), clusters = [], cur = null;
+    byK.forEach(function (c) {
+      if (cur && c.k / cur[0].k < 1.06) cur.push(c); else { cur = [c]; clusters.push(cur); }
+    });
+    clusters = clusters.map(function (grp) {
+      return { k: grp[grp.length >> 1].k, n: grp.length, lo: grp[0].k, hi: grp[grp.length - 1].k,
+               x0: Math.min.apply(null, grp.map(function (c) { return c.x0; })),
+               x1: Math.max.apply(null, grp.map(function (c) { return c.x1; })), strips: grp };
+    }).sort(function (a, b) { return b.n - a.n; });
+    return { cands: out, consensus: consensus, clusters: clusters };
+  };
+
+  /* ---------- locating the boundary from a repeating structure ---------- */
+  /* Column-mean |dI/dy| profile of a strip, rows ya..yb. */
+  function profileOf(g, w, h, x0, x1, ya, yb) {
+    ya = Math.max(1, ya | 0); yb = Math.min(h - 1, yb | 0);
+    var n = yb - ya, p = new Float32Array(Math.max(0, n)), cols = x1 - x0, mean = 0;
+    for (var i = 0; i < n; i++) {
+      var y = ya + i, up = (y - 1) * w, dn = (y + 1) * w, s = 0;
+      for (var x = x0; x < x1; x++) s += Math.abs(g[dn + x] - g[up + x]);
+      p[i] = s / cols; mean += p[i];
+    }
+    mean /= Math.max(1, n);
+    for (i = 0; i < n; i++) p[i] -= mean;
+    return { p: p, ya: ya };
+  }
+  /* Slide a window down each strip and watch the dominant period. Where it jumps from
+     pA to a longer pB and stays there, the stretch starts. The exact row is where a wave
+     of period pA stops fitting and a wave of period pB starts (phase-coherent sums). */
+  AF.findBoundary = function (g, w, h) {
+    var win = Math.max(110, Math.round(h * 0.14)), stepY = 12;
+    var sw = Math.min(80, Math.max(40, Math.round(w / 8))), stepX = Math.max(20, sw >> 1), found = [];
+    for (var x0 = 0; x0 + sw <= w; x0 += stepX) {
+      var track = [], ya, i;
+      for (ya = 0; ya + win <= h; ya += stepY) {
+        var r = AF.periodScan(g, w, h, x0, x0 + sw, ya, ya + win);
+        track.push(r && !r.edge && r.snr >= 4 ? r.period : 0);
+      }
+      // runs of windows that agree on a period
+      var runs = [], cur = null;
+      for (i = 0; i < track.length; i++) {
+        var pv = track[i];
+        if (pv && cur && Math.abs(pv / cur.p - 1) < 0.05) { cur.b = i; cur.sum += pv; cur.n++; cur.p = cur.sum / cur.n; }
+        else { cur = pv ? { a: i, b: i, p: pv, sum: pv, n: 1 } : null; if (cur) runs.push(cur); }
+      }
+      runs = runs.filter(function (q) { return q.n >= 3; });
+      var maxGap = Math.ceil(win / stepY) + 2;
+      for (i = 0; i + 1 < runs.length; i++) {
+        var A = runs[i], B = runs[i + 1], k = B.p / A.p;
+        if (B.a - A.b > maxGap || k < 1.08 || k > 2.6) continue;
+        if (blocky(A.p) && blocky(B.p)) continue;
+        // refine inside the hand-over zone
+        var top = A.a * stepY, bot = Math.min(h - 1, B.b * stepY + win);
+        var pr = profileOf(g, w, h, x0, x0 + sw, top, bot), P = pr.p, n = P.length;
+        var wa = (2 * Math.PI) / A.p, wb = (2 * Math.PI) / B.p;
+        var ar = new Float32Array(n + 1), ai = new Float32Array(n + 1), br = new Float32Array(n + 1), bi = new Float32Array(n + 1), t;
+        for (t = 0; t < n; t++) { ar[t + 1] = ar[t] + P[t] * Math.cos(wa * t); ai[t + 1] = ai[t] + P[t] * Math.sin(wa * t); }
+        for (t = n - 1; t >= 0; t--) { br[t] = br[t + 1] + P[t] * Math.cos(wb * t); bi[t] = bi[t + 1] + P[t] * Math.sin(wb * t); }
+        var lo = Math.max(2 * A.p, A.b * stepY + win / 2 - top - win * 0.25), hi = Math.min(n - 2 * B.p, B.a * stepY + win / 2 - top + win * 0.25);
+        var best = -1, bestT = -1, mA = 1e-9, mB = 1e-9;
+        for (t = Math.round(lo); t <= hi; t++) { mA = Math.max(mA, Math.hypot(ar[t], ai[t])); mB = Math.max(mB, Math.hypot(br[t], bi[t])); }
+        for (t = Math.round(lo); t <= hi; t++) {
+          var sc = Math.hypot(ar[t], ai[t]) / mA + Math.hypot(br[t], bi[t]) / mB;
+          if (sc > best) { best = sc; bestT = t; }
+        }
+        if (bestT < 0) continue;
+        // the texture is continuous across the boundary, so the two waves must meet in phase:
+        // slide within half an ambiguity period to the row where they do
+        var amb = (A.p * B.p) / (B.p - A.p), half = Math.min(14, Math.floor(amb / 2)), bestJ = -1, bestT2 = bestT;
+        for (var c = Math.max(1, bestT - half); c <= Math.min(n - 1, bestT + half); c++) {
+          var ur = ar[c] * Math.cos(wa * c) + ai[c] * Math.sin(wa * c), ui = ai[c] * Math.cos(wa * c) - ar[c] * Math.sin(wa * c);
+          var lr = br[c] * Math.cos(wb * c) + bi[c] * Math.sin(wb * c), li = bi[c] * Math.cos(wb * c) - br[c] * Math.sin(wb * c);
+          var J = Math.hypot(ur + lr, ui + li);
+          if (J > bestJ) { bestJ = J; bestT2 = c; }
+        }
+        found.push({ x0: x0, x1: x0 + sw, y0: pr.ya + bestT2, yEnv: pr.ya + bestT, k: k, pA: A.p, pB: B.p, score: best, na: A.n, nb: B.n });
+      }
+    }
+    // k = 2 is the same texture read at twice its period, not a stretch
+    found = found.filter(function (c) { return Math.abs(c.k - 2) > 0.07; });
+    if (!found.length) return null;
+    function near(o, c) { return Math.abs(o.y0 - c.y0) <= 10 && Math.abs(o.k / c.k - 1) < 0.05; }
+    var pool = found.slice().sort(function (a, b) { return (b.na + b.nb) - (a.na + a.nb); }), clusters = [];
+    while (pool.length) {
+      var seed = pool[0], grp = pool.filter(function (o) { return near(o, seed); });
+      pool = pool.filter(function (o) { return !near(o, seed); });
+      var ys = grp.map(function (o) { return o.y0; }).sort(function (a, b) { return a - b; });
+      var ks = grp.map(function (o) { return o.k; }).sort(function (a, b) { return a - b; });
+      clusters.push({ y0: ys[ys.length >> 1], k: ks[ks.length >> 1], n: grp.length, yLo: ys[0], yHi: ys[ys.length - 1],
+                      run: Math.max.apply(null, grp.map(function (o) { return o.na + o.nb; })), strips: grp });
+    }
+    clusters.forEach(function (c) { c.strong = c.n >= 2 && c.run >= 11; });
+    clusters.sort(function (a, b) { return (b.strong - a.strong) || (b.n - a.n) || (b.run - a.run); });
+    return clusters;
+  };
+
+  /* ---------- cue 2: shapes that should be square / circular ---------- */
+  function gradMag(g, w, h) {
+    var m = new Float32Array(w * h);
+    for (var y = 1; y < h - 1; y++)
+      for (var x = 1; x < w - 1; x++) {
+        var i = y * w + x, gx = g[i + 1] - g[i - 1], gy = g[i + w] - g[i - w];
+        m[i] = Math.sqrt(gx * gx + gy * gy);
+      }
+    return m;
+  }
+  AF.gradMag = gradMag;
+
+  /* Downscale by integer-ish factor with area averaging. */
+  AF.downscale = function (g, w, h, maxSide) {
+    var s = Math.max(1, Math.round(Math.max(w, h) / maxSide));
+    if (s === 1) return { g: g, w: w, h: h, s: 1 };
+    var W = Math.floor(w / s), H = Math.floor(h / s), o = new Float32Array(W * H);
+    for (var y = 0; y < H; y++)
+      for (var x = 0; x < W; x++) {
+        var sum = 0;
+        for (var dy = 0; dy < s; dy++) for (var dx = 0; dx < s; dx++) sum += g[(y * s + dy) * w + x * s + dx];
+        o[y * W + x] = sum / (s * s);
+      }
+    return { g: o, w: W, h: H, s: s };
+  };
+
+  /* Regions enclosed by edges; keep the ones whose outline fills its bounding box like a
+     rectangle or like an ellipse (holes inside, e.g. socket pins, are ignored).
+     Runs at two edge thresholds because pale-on-pale objects need a low one.
+     Returned boxes are in full-resolution pixels. */
+  AF.findShapeCandidates = function (gFull, w, h, opts) {
+    opts = opts || {};
+    var d = AF.downscale(gFull, w, h, opts.maxSide || 560), W = d.w, H = d.h, S = d.s;
+    var g = AF.blur(d.g, W, H, 1), mag = gradMag(g, W, H);
+    var gSnap = AF.blur(gFull, w, h, 1);
+    var sample = [], i;
+    for (i = 0; i < mag.length; i += 7) sample.push(mag[i]);
+    sample.sort(function (a, b) { return a - b; });
+    var med = sample[sample.length >> 1], out = [];
+    /* thick edges close pale outlines; thin edges survive smooth shading (a lit ball) */
+    [[Math.max(1.6, 1.8 * med), false], [Math.max(2.4, 3.2 * med), false], [Math.max(2.0, 2.2 * med), true]].forEach(function (cfg) {
+      collect(cfg[0], cfg[1]).forEach(function (c) {
+        var dup = out.some(function (o) {
+          var ix = Math.max(0, Math.min(o.x + o.w, c.x + c.w) - Math.max(o.x, c.x));
+          var iy = Math.max(0, Math.min(o.y + o.h, c.y + c.h) - Math.max(o.y, c.y));
+          return (ix * iy) / (o.w * o.h + c.w * c.h - ix * iy) > 0.6;
+        });
+        if (!dup) out.push(c);
+      });
+    });
+    out.sort(function (a, b) { return b.score - a.score; });
+    return out.slice(0, opts.max || 14);
+
+    function collect(T, thin) {
+      var res = [], edge = new Uint8Array(W * H), x, y, i;
+      for (y = 1; y < H - 1; y++) for (x = 1; x < W - 1; x++) {
+        i = y * W + x;
+        var m = mag[i];
+        if (m <= T) continue;
+        var gx = g[i + 1] - g[i - 1], gy = g[i + W] - g[i - W], ax = Math.abs(gx), ay = Math.abs(gy), o;
+        if (ax > 2.414 * ay) o = 1; else if (ay > 2.414 * ax) o = W; else o = (gx > 0) === (gy > 0) ? W + 1 : W - 1;
+        if (!thin || (m > mag[i + o] * 1.02 && m >= mag[i - o])) edge[i] = 1;
+      }
+      if (thin) { // thicken the thinned lines once so small breaks close
+        var th = new Uint8Array(edge);
+        for (y = 1; y < H - 1; y++) for (x = 1; x < W - 1; x++) {
+          i = y * W + x;
+          if (edge[i - 1] || edge[i + 1] || edge[i - W] || edge[i + W]) th[i] = 1;
+        }
+        edge = th;
+      }
+      var grow = thin ? 1.5 : 1.5;
+      var e2 = new Uint8Array(edge);
+      for (y = 1; y < H - 1; y++) for (x = 1; x < W - 1; x++) {
+        i = y * W + x;
+        if (!edge[i] && ((edge[i - 1] && edge[i + 1]) || (edge[i - W] && edge[i + W]) ||
+            (edge[i - W - 1] && edge[i + W + 1]) || (edge[i - W + 1] && edge[i + W - 1]))) e2[i] = 1;
+      }
+      var label = new Uint8Array(W * H), stack = new Int32Array(W * H);
+      var minArea = Math.max(50, W * H * 0.0005), maxArea = W * H * 0.14;
+      var rowL = new Int32Array(H), rowR = new Int32Array(H);
+      for (var start = 0; start < W * H; start++) {
+        if (e2[start] || label[start]) continue;
+        var sp = 0, area = 0, minx = W, maxx = 0, miny = H, maxy = 0, border = false, px = [];
+        stack[sp++] = start; label[start] = 1;
+        while (sp) {
+          var q = stack[--sp], qx = q % W, qy = (q / W) | 0;
+          area++; if (area <= maxArea) px.push(q);
+          if (qx < minx) minx = qx; if (qx > maxx) maxx = qx; if (qy < miny) miny = qy; if (qy > maxy) maxy = qy;
+          if (qx === 0 || qy === 0 || qx === W - 1 || qy === H - 1) border = true;
+          if (qx > 0 && !e2[q - 1] && !label[q - 1]) { label[q - 1] = 1; stack[sp++] = q - 1; }
+          if (qx < W - 1 && !e2[q + 1] && !label[q + 1]) { label[q + 1] = 1; stack[sp++] = q + 1; }
+          if (qy > 0 && !e2[q - W] && !label[q - W]) { label[q - W] = 1; stack[sp++] = q - W; }
+          if (qy < H - 1 && !e2[q + W] && !label[q + W]) { label[q + W] = 1; stack[sp++] = q + W; }
+        }
+        if (border || area < minArea || area > maxArea) continue;
+        var bw = maxx - minx + 1, bh = maxy - miny + 1;
+        if (bw < 9 || bh < 9 || bw / bh > 3.5 || bh / bw > 3.5) continue;
+        for (y = miny; y <= maxy; y++) { rowL[y] = W; rowR[y] = -1; }
+        for (var t = 0; t < px.length; t++) {
+          var ux = px[t] % W, uy = (px[t] / W) | 0;
+          if (ux < rowL[uy]) rowL[uy] = ux; if (ux > rowR[uy]) rowR[uy] = ux;
+        }
+        var span = 0, inter = 0, cx = (minx + maxx) / 2, cy = (miny + maxy) / 2, ra = bw / 2, rb = bh / 2;
+        for (y = miny; y <= maxy; y++) {
+          if (rowR[y] < 0) continue;
+          span += rowR[y] - rowL[y] + 1;
+          var ey = (y - cy) / rb, half = ey * ey < 1 ? ra * Math.sqrt(1 - ey * ey) : 0;
+          inter += Math.max(0, Math.min(rowR[y] + 0.5, cx + half) - Math.max(rowL[y] - 0.5, cx - half));
+        }
+        if (area < 0.55 * span) continue;           // mostly hollow: a ring or clutter, not a face
+        var fill = span / (bw * bh), type = null, fit = 0;
+        var iou = inter / (Math.PI * ra * rb + span - inter);
+        if (fill >= 0.88) { type = "rect"; fit = fill; }
+        else if (iou >= 0.86) { type = "ellipse"; fit = iou; }
+        if (!type) continue;
+        // the edge line sits one pixel outside the region: grow, then refine at full resolution
+        var box = { x: (minx - grow) * S, y: (miny - grow) * S, w: (bw + 2 * grow) * S, h: (bh + 2 * grow) * S };
+        var ref = type === "rect" ? AF.snapRect(gSnap, w, h, box, 3 * S + 1) : AF.snapEllipse(gSnap, w, h, box, 2 * S + 1);
+        res.push({ type: type, x: ref.x, y: ref.y, w: ref.w, h: ref.h, ratio: ref.h / ref.w, fit: fit, score: fit * Math.sqrt(span) });
+      }
+      return res;
+    }
+  };
+
+  /* Snap each side of a rough box to the strongest nearby edge (sub-pixel). */
+  AF.snapRect = function (g, w, h, b, r) {
+    r = Math.max(2, Math.round(r || Math.max(4, 0.12 * Math.min(b.w, b.h))));
+    function sideV(xc, ya, yb) { // vertical edge near column xc
+      var bestV = -1, bestX = xc, vals = [];
+      for (var x = Math.round(xc) - r; x <= Math.round(xc) + r; x++) {
+        var s = 0, n = 0;
+        if (x < 1 || x >= w - 1) { vals.push(0); continue; }
+        for (var y = Math.max(1, Math.round(ya)); y < Math.min(h - 1, Math.round(yb)); y++) { s += Math.abs(g[y * w + x + 1] - g[y * w + x - 1]); n++; }
+        s = n ? s / n : 0; vals.push(s);
+        if (s > bestV) { bestV = s; bestX = x; }
+      }
+      var i = bestX - (Math.round(xc) - r), d = 0;
+      if (i > 0 && i < vals.length - 1) { var den = vals[i - 1] - 2 * vals[i] + vals[i + 1]; if (den < 0) d = (0.5 * (vals[i - 1] - vals[i + 1])) / den; }
+      return bestX + d;
+    }
+    function sideH(yc, xa, xb) {
+      var bestV = -1, bestY = yc, vals = [];
+      for (var y = Math.round(yc) - r; y <= Math.round(yc) + r; y++) {
+        var s = 0, n = 0;
+        if (y < 1 || y >= h - 1) { vals.push(0); continue; }
+        for (var x = Math.max(1, Math.round(xa)); x < Math.min(w - 1, Math.round(xb)); x++) { s += Math.abs(g[(y + 1) * w + x] - g[(y - 1) * w + x]); n++; }
+        s = n ? s / n : 0; vals.push(s);
+        if (s > bestV) { bestV = s; bestY = y; }
+      }
+      var i = bestY - (Math.round(yc) - r), d = 0;
+      if (i > 0 && i < vals.length - 1) { var den = vals[i - 1] - 2 * vals[i] + vals[i + 1]; if (den < 0) d = (0.5 * (vals[i - 1] - vals[i + 1])) / den; }
+      return bestY + d;
+    }
+    var my = b.h * 0.2, mx = b.w * 0.2;
+    var L = sideV(b.x, b.y + my, b.y + b.h - my), R = sideV(b.x + b.w, b.y + my, b.y + b.h - my);
+    var T = sideH(b.y, b.x + mx, b.x + b.w - mx), B = sideH(b.y + b.h, b.x + mx, b.x + b.w - mx);
+    if (R - L < 4 || B - T < 4) return { x: b.x, y: b.y, w: b.w, h: b.h };
+    return { x: L, y: T, w: R - L, h: B - T };
+  };
+
+  /* Fit an axis-aligned ellipse near a rough box. The cost is a trimmed mean of the
+     outward gradient along the perimeter, so a partly hidden ball still fits. */
+  AF.snapEllipse = function (g, w, h, b, r) {
+    r = Math.max(2, Math.round(r || Math.max(4, 0.12 * Math.min(b.w, b.h))));
+    var N = 96, cs = new Float32Array(N), sn = new Float32Array(N), i;
+    for (i = 0; i < N; i++) { cs[i] = Math.cos((2 * Math.PI * i) / N); sn[i] = Math.sin((2 * Math.PI * i) / N); }
+    function samp(x, y) {
+      if (x < 1 || y < 1 || x >= w - 2 || y >= h - 2) return 0;
+      var xi = x | 0, yi = y | 0, fx = x - xi, fy = y - yi, o = yi * w + xi;
+      return g[o] * (1 - fx) * (1 - fy) + g[o + 1] * fx * (1 - fy) + g[o + w] * (1 - fx) * fy + g[o + w + 1] * fx * fy;
+    }
+    var vals = new Float32Array(N);
+    function cost(cx, cy, a, bb) {
+      for (var j = 0; j < N; j++) {
+        var nx = cs[j] / a, ny = sn[j] / bb, nl = Math.sqrt(nx * nx + ny * ny); nx /= nl; ny /= nl;
+        var px = cx + a * cs[j], py = cy + bb * sn[j];
+        vals[j] = Math.abs(samp(px + 1.5 * nx, py + 1.5 * ny) - samp(px - 1.5 * nx, py - 1.5 * ny));
+      }
+      var s = Array.prototype.slice.call(vals).sort(function (p, q) { return q - p; }), keep = Math.round(N * 0.55), t = 0;
+      for (var m = 0; m < keep; m++) t += s[m];
+      return t / keep;
+    }
+    var P = [b.x + b.w / 2, b.y + b.h / 2, b.w / 2, b.h / 2], bestC = cost(P[0], P[1], P[2], P[3]);
+    for (var stepSize = r; stepSize >= 0.25; stepSize /= 2) {
+      var improved = true, guard = 0;
+      while (improved && guard++ < 12) {
+        improved = false;
+        for (var d = 0; d < 4; d++) for (var sg = -1; sg <= 1; sg += 2) {
+          var Q = P.slice(); Q[d] += sg * stepSize;
+          if (Q[2] < 3 || Q[3] < 3) continue;
+          var c = cost(Q[0], Q[1], Q[2], Q[3]);
+          if (c > bestC * 1.002) { bestC = c; P = Q; improved = true; }
+        }
+      }
+    }
+    return { x: P[0] - P[2], y: P[1] - P[3], w: 2 * P[2], h: 2 * P[3], strength: bestC };
+  };
+
+  /* How much of a shape's height lies in the stretched band → k from its h/w.
+     trueRatio = real height / real width (1 for a square or a sphere). */
+  AF.kFromBox = function (box, p, trueRatio) {
+    var top = box.y, bot = box.y + box.h, tr = trueRatio || 1;
+    var inBand = Math.max(0, Math.min(bot, p.y1) - Math.max(top, p.y0)), outBand = box.h - inBand;
+    if (inBand < 0.15 * box.h) return { k: null, frac: inBand / box.h };
+    // box.w * tr = outBand + inBand / k
+    var need = box.w * tr - outBand;
+    if (need <= 0) return { k: null, frac: inBand / box.h };
+    return { k: inBand / need, frac: inBand / box.h };
+  };
+
+  /* ---------- cue 3: body-proportion prior ---------- */
+  /* Knee (mid-patella) height / stature and crotch height / stature, computed from
+     ANSUR II (2012 US Army survey, 4,082 men + 1,986 women, public data). */
+  AF.PRIORS = {
+    knee:   { label: "膝盖高 / 身高", p05: 0.263, p50: 0.277, p95: 0.293 },
+    crotch: { label: "裆高 / 身高",   p05: 0.458, p50: 0.481, p95: 0.505 }
+  };
+  /* pts: stretched-image y of head top (H), joint (J = knee or crotch), sole (S). */
+  AF.kFromBody = function (H, J, S, p, r) {
+    function ratio(k) {
+      var q = { y0: p.y0, y1: p.y1, k: k };
+      var h = AF.unmapY(H, q), j = AF.unmapY(J, q), s = AF.unmapY(S, q);
+      return (s - j) / (s - h);
+    }
+    var lo = 0.4, hi = 4, flo = ratio(lo) - r, fhi = ratio(hi) - r;
+    if (!(S > J && J > H) || flo * fhi > 0) return null;
+    for (var i = 0; i < 60; i++) {
+      var mid = 0.5 * (lo + hi), fm = ratio(mid) - r;
+      if (fm * flo > 0) { lo = mid; flo = fm; } else hi = mid;
+    }
+    return 0.5 * (lo + hi);
+  };
+  AF.bodyEstimate = function (H, J, S, p, which) {
+    var pr = AF.PRIORS[which];
+    return { k50: AF.kFromBody(H, J, S, p, pr.p50), kA: AF.kFromBody(H, J, S, p, pr.p05), kB: AF.kFromBody(H, J, S, p, pr.p95),
+             observed: (S - J) / (S - H) };
+  };
+
+  if (typeof module !== "undefined" && module.exports) module.exports = AF;
+  root.AF = AF;
+})(typeof globalThis !== "undefined" ? globalThis : this);
+
+</script>
+<script>
+/* 还原尺 unstretch — Copyright (C) 2026 songj33
+   SPDX-License-Identifier: GPL-3.0-only */
+(function () {
+  "use strict";
+  var AF = window.AF;
+  var $ = function (id) { return document.getElementById(id); };
+  var view = $("view"), vctx = view.getContext("2d"), out = $("out"), octx = out.getContext("2d");
+  var ruler = $("ruler"), rctx = ruler.getContext("2d");
+  var src = document.createElement("canvas"), sctx = src.getContext("2d", { willReadFrequently: true });
+  var video = document.createElement("video");
+  video.playsInline = true; video.preload = "auto";
+
+  var TOOLS = ["toolRect", "toolEllipse", "toolGap", "toolBody", "toolCrop"];
+  var base = document.createElement("canvas"), bctx = base.getContext("2d");
+  var MARK = "#ff4a2b", MARK2 = "#ffd23f", CAND = "#4fd1ff";
+  var S = {
+    w: 0, h: 0, kind: "none", name: "还原尺", isDemo: false,
+    p: { y0: 0, y1: 0, k: 1 }, toBottom: true,
+    mode: "idle", ev: [], cands: [], adopted: null, hover: null,
+    draft: null, pts: [], gapA: null, drag: null, seq: 0, gray: null, ds: 1, recording: false, stopRec: null,
+    bw: 0, bh: 0, crop: null, track: false, trackOff: 0, busy: false
+  };
+
+  /* ------------------------------------------------------------ helpers */
+  function fmt(x, d) { return x == null || !isFinite(x) ? "–" : x.toFixed(d == null ? 2 : d); }
+  function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+  function hint(msg, warn) { var el = $("hint"); el.textContent = msg || ""; el.className = "hint" + (warn ? " warn" : ""); }
+  function idleHint() {
+    hint(S.kind === "none" ? "" : "拖红色分界线到拉伸开始的位置（通常在胯部附近），然后找参照物。");
+  }
+  function getGray() {
+    if (!S.gray) {
+      var d = sctx.getImageData(0, 0, S.w, S.h), g = AF.gray(d.data, S.w, S.h);
+      S.gray = { g: g, b: AF.blur(g, S.w, S.h, 1) };
+    }
+    return S.gray;
+  }
+  function halo(ctx, path, color, lw, dash) {
+    ctx.save(); ctx.lineJoin = "round"; ctx.lineCap = "round"; ctx.setLineDash(dash || []);
+    ctx.strokeStyle = "rgba(0,0,0,.55)"; ctx.lineWidth = lw * 2.4; ctx.beginPath(); path(ctx); ctx.stroke();
+    ctx.strokeStyle = color; ctx.lineWidth = lw; ctx.beginPath(); path(ctx); ctx.stroke();
+    ctx.restore();
+  }
+  function label(ctx, text, x, y, color, size) {
+    ctx.save(); ctx.font = "600 " + size + "px ui-monospace, Menlo, Consolas, monospace";
+    var w = ctx.measureText(text).width, pad = size * 0.35;
+    x = clamp(x, 0, S.w - w - 2 * pad); y = clamp(y, size + 2 * pad, S.h);
+    ctx.fillStyle = "rgba(0,0,0,.72)"; ctx.fillRect(x, y - size - pad, w + 2 * pad, size + 2 * pad);
+    ctx.fillStyle = color; ctx.textBaseline = "alphabetic"; ctx.fillText(text, x + pad, y - pad * 0.4);
+    ctx.restore();
+  }
+
+  /* ------------------------------------------------------------ evidence */
+  function solveGap(A, B, p) {
+    function len(s, k) { var q = { y0: p.y0, y1: p.y1, k: k }; return AF.unmapY(s.yb, q) - AF.unmapY(s.ya, q); }
+    function f(k) { return len(B, k) - len(A, k); }
+    var lo = 0.4, hi = 4, flo = f(lo), fhi = f(hi);
+    if (flo * fhi > 0) return null;
+    for (var i = 0; i < 60; i++) { var m = 0.5 * (lo + hi), fm = f(m); if (fm * flo > 0) { lo = m; flo = fm; } else hi = m; }
+    return 0.5 * (lo + hi);
+  }
+  function computeEv(e) {
+    var p = S.p;
+    e.lo = e.hi = null; e.note = "";
+    if (e.kind === "box") {
+      var r = AF.kFromBox(e.box, p, e.tr);
+      e.k = r.k;
+      var name = e.shape === "ellipse" ? "圆" : "方形";
+      e.title = (e.auto ? "候选" : "手框") + name + (Math.abs(e.tr - 1) > 0.005 ? "（真实高÷宽 " + fmt(e.tr) + "）" : "");
+      e.detail = "量到 " + fmt(e.box.w, 0) + "×" + fmt(e.box.h, 0) + " px，高÷宽 " + fmt(e.box.h / e.box.w);
+      if (r.k == null) e.note = r.frac < 0.15 ? "它不在拉伸带里，算不出倍数。" : "按这个分界线算不出合理倍数。";
+      else if (r.frac < 0.98) e.note = "只有 " + Math.round(r.frac * 100) + "% 落在拉伸带里，已按比例折算。";
+    } else if (e.kind === "gap") {
+      e.k = solveGap(e.A, e.B, p);
+      e.title = "两段间距";
+      e.detail = "第一段 " + fmt(e.A.yb - e.A.ya, 0) + " px，第二段 " + fmt(e.B.yb - e.B.ya, 0) + " px";
+      if (e.k == null) e.note = "两段要一段在分界线上方、一段在拉伸带里。";
+    } else if (e.kind === "body") {
+      var b = AF.bodyEstimate(e.H, e.J, e.S, p, e.which), pr = AF.PRIORS[e.which];
+      e.k = b.k50; e.lo = b.kB; e.hi = b.kA;
+      e.title = "人体比例（" + (e.auto ? "自动识别，" : "") + (e.which === "knee" ? "膝盖" : "裆部") + "）";
+      e.detail = "画面里 " + pr.label + " = " + fmt(b.observed, 3) + "，人群中位 " + fmt(pr.p50, 3);
+      e.note = e.k == null ? "按这个分界线算不出倍数，检查三个点的顺序。" : "人群 5%–95% 对应 " + fmt(e.lo) + "–" + fmt(e.hi) + "。仰拍、厚底鞋会让它偏大。" +
+        (e.auto ? "点是模型估的，脚底常偏高，会低估倍数；三个点都能拖动修正。" : "三个点可以拖动微调。");
+    } else if (e.kind === "repeat") {
+      e.title = "重复结构（" + e.n + " 条竖带" + (e.n > 1 ? "一致" : "") + "）";
+      e.detail = "横向 " + e.x0 + "–" + e.x1 + " px：上方周期 " + fmt(e.strips[0].pUp, 1) + " px，下方 " + fmt(e.strips[0].pDown, 1) + " px";
+      if (e.n > 1) { e.lo = e.rlo; e.hi = e.rhi; }
+      if (e.n === 1) e.note = "只有一条竖带，没有别的印证，谨慎采用。";
+      if (Math.abs(e.k - 1) < 0.03) e.note = "上下周期相同：可能没拉伸，也可能只是视频压缩的块网格。";
+      if (Math.abs(e.y0At - p.y0) > 4) e.note = "分界线动过了，重新找一次更准。";
+    }
+  }
+  function addEv(e, adoptIt) {
+    e.id = ++S.seq; computeEv(e); S.ev.push(e);
+    if (adoptIt && e.k != null) adopt(e.id); else { renderLists(); render(); }
+    return e;
+  }
+  function adopt(id) {
+    var e = S.ev.filter(function (x) { return x.id === id; })[0];
+    if (!e || e.k == null) return;
+    S.adopted = id; setK(e.k, true);
+  }
+  function setK(k, keepAdopted) {
+    S.p.k = clamp(k, 0.4, 4);
+    if (!keepAdopted) S.adopted = null;
+    renderLists(); render();
+  }
+  function recomputeAll() {
+    S.ev.forEach(computeEv);
+    var a = S.ev.filter(function (x) { return x.id === S.adopted; })[0];
+    if (a && a.k != null && a.kind !== "repeat") S.p.k = clamp(a.k, 0.4, 4);
+  }
+
+  /* ------------------------------------------------------------ drawing */
+  function renderOut() {
+    var p = S.p, w = S.w, h = S.h, H = Math.max(1, Math.round(AF.restoredHeight(h, p)));
+    var resized = out.width !== w || out.height !== H;
+    if (resized) { out.width = w; out.height = H; }
+    octx.imageSmoothingEnabled = true; octx.imageSmoothingQuality = "high";
+    octx.fillStyle = "#000"; octx.fillRect(0, 0, w, H);
+    if (p.y0 > 0) octx.drawImage(src, 0, 0, w, p.y0, 0, 0, w, p.y0);
+    var bh = (p.y1 - p.y0) / p.k;
+    if (p.y1 > p.y0) octx.drawImage(src, 0, p.y0, w, p.y1 - p.y0, 0, p.y0, w, bh + (p.y1 < h ? 0.6 : 0));
+    if (p.y1 < h) octx.drawImage(src, 0, p.y1, w, h - p.y1, 0, p.y0 + bh, w, h - p.y1);
+    if (resized) layout();
+  }
+  function drawBoxShape(c, b, shape) {
+    if (shape === "ellipse") c.ellipse(b.x + b.w / 2, b.y + b.h / 2, Math.max(1, b.w / 2), Math.max(1, b.h / 2), 0, 0, Math.PI * 2);
+    else c.rect(b.x, b.y, b.w, b.h);
+  }
+  function drawSeg(c, s, t) { c.moveTo(s.x - t, s.ya); c.lineTo(s.x + t, s.ya); c.moveTo(s.x, s.ya); c.lineTo(s.x, s.yb); c.moveTo(s.x - t, s.yb); c.lineTo(s.x + t, s.yb); }
+  function renderView() {
+    var p = S.p, w = S.w, h = S.h, ds = S.ds, lw = 1.6 * ds, fs = 12 * ds;
+    if (view.width !== w || view.height !== h) { view.width = w; view.height = h; }
+    vctx.drawImage(src, 0, 0);
+    vctx.fillStyle = "rgba(255,74,43,.10)"; vctx.fillRect(0, p.y0, w, p.y1 - p.y0);
+
+    S.cands.forEach(function (c, i) {
+      var hot = S.hover === "c" + i;
+      halo(vctx, function (x) { drawBoxShape(x, c, c.type); }, CAND, hot ? lw * 1.6 : lw, hot ? [] : [5 * ds, 4 * ds]);
+      label(vctx, String.fromCharCode(65 + i), c.x, c.y - 2 * ds, CAND, fs);
+    });
+    S.ev.forEach(function (e, i) {
+      var hot = S.hover === "e" + e.id || S.adopted === e.id, col = hot ? MARK2 : MARK, n = String(i + 1);
+      if (e.kind === "box") {
+        halo(vctx, function (x) { drawBoxShape(x, e.box, e.shape); }, col, lw);
+        label(vctx, n, e.box.x, e.box.y - 2 * ds, col, fs);
+      } else if (e.kind === "gap") {
+        halo(vctx, function (x) { drawSeg(x, e.A, 7 * ds); drawSeg(x, e.B, 7 * ds); }, col, lw);
+        label(vctx, n, e.A.x + 9 * ds, e.A.ya + fs, col, fs);
+      } else if (e.kind === "body") {
+        halo(vctx, function (x) { x.moveTo(e.px[0], e.H); x.lineTo(e.px[1], e.J); x.lineTo(e.px[2], e.S); }, col, lw, [3 * ds, 4 * ds]);
+        [[e.px[0], e.H], [e.px[1], e.J], [e.px[2], e.S]].forEach(function (q) {
+          halo(vctx, function (x) { x.arc(q[0], q[1], 5 * ds, 0, 7); }, col, lw);
+        });
+        label(vctx, n, e.px[0] + 8 * ds, e.H, col, fs);
+      } else if (e.kind === "repeat") {
+        var shown = [];
+        e.strips.slice().sort(function (a, b) { return b.snr - a.snr; }).forEach(function (s) {
+          if (shown.length < 3 && !shown.some(function (o) { return s.x0 < o.x1 && o.x0 < s.x1; })) shown.push(s);
+        });
+        shown.forEach(function (s) {
+          halo(vctx, function (x) {
+            x.rect(s.x0, s.ua, s.x1 - s.x0, s.ub - s.ua); x.rect(s.x0, s.da, s.x1 - s.x0, s.db - s.da);
+          }, col, lw * 0.7, [2 * ds, 3 * ds]);
+          vctx.save(); vctx.strokeStyle = col; vctx.lineWidth = Math.max(1, lw * 0.8); vctx.beginPath();
+          var y, tl = 10 * ds;
+          for (y = s.ub; y > s.ua; y -= s.pUp) { vctx.moveTo(s.x0, y); vctx.lineTo(s.x0 + tl, y); }
+          for (y = s.da; y < s.db; y += s.pDown) { vctx.moveTo(s.x0, y); vctx.lineTo(s.x0 + tl, y); }
+          vctx.stroke(); vctx.restore();
+        });
+        label(vctx, n, shown[0].x0, shown[0].ua, col, fs);
+      }
+    });
+    // draft
+    var d = S.draft;
+    if (d && d.box) halo(vctx, function (x) { drawBoxShape(x, d.box, S.mode); }, "#fff", lw, [4 * ds, 3 * ds]);
+    if (d && d.seg) halo(vctx, function (x) { drawSeg(x, d.seg, 7 * ds); }, "#fff", lw);
+    if (S.gapA) halo(vctx, function (x) { drawSeg(x, S.gapA, 7 * ds); }, MARK2, lw);
+    S.pts.forEach(function (q) { halo(vctx, function (x) { x.arc(q.x, q.y, 5 * ds, 0, 7); }, MARK2, lw); });
+
+    // boundary lines on top
+    halo(vctx, function (x) { x.moveTo(0, p.y0); x.lineTo(w, p.y0); }, MARK, lw * 1.2);
+    label(vctx, "分界线 " + Math.round(p.y0), w - 96 * ds, p.y0 - 3 * ds, MARK, fs);
+    if (!S.toBottom) {
+      halo(vctx, function (x) { x.moveTo(0, p.y1); x.lineTo(w, p.y1); }, MARK, lw, [8 * ds, 5 * ds]);
+      label(vctx, "拉伸到 " + Math.round(p.y1), w - 96 * ds, p.y1 - 3 * ds, MARK, fs);
+    }
+  }
+  function drawRuler() {
+    var cssH = parseFloat(view.style.height) || 0, cssW = 34, dpr = Math.min(2, window.devicePixelRatio || 1);
+    ruler.style.width = cssW + "px"; ruler.style.height = cssH + "px";
+    ruler.width = Math.round(cssW * dpr); ruler.height = Math.max(1, Math.round(cssH * dpr));
+    rctx.setTransform(dpr, 0, 0, dpr, 0, 0); rctx.clearRect(0, 0, cssW, cssH);
+    if (!S.h) return;
+    var sc = cssH / S.h, step = sc > 0.9 ? 50 : sc > 0.45 ? 100 : 200;
+    rctx.strokeStyle = "rgba(201,207,218,.55)"; rctx.fillStyle = "rgba(201,207,218,.85)"; rctx.lineWidth = 1;
+    rctx.font = "9px ui-monospace, Menlo, Consolas, monospace"; rctx.textBaseline = "middle"; rctx.textAlign = "right";
+    for (var y = 0; y <= S.h; y += step / 5) {
+      var major = Math.round(y) % step === 0, py = Math.round(y * sc) + 0.5;
+      rctx.beginPath(); rctx.moveTo(cssW - (major ? 9 : 4), py); rctx.lineTo(cssW, py); rctx.stroke();
+      if (major && y > 0 && py < cssH - 6) rctx.fillText(String(Math.round(y)), cssW - 11, py);
+    }
+    rctx.fillStyle = MARK;
+    [S.p.y0].concat(S.toBottom ? [] : [S.p.y1]).forEach(function (yy) {
+      var q = yy * sc; rctx.beginPath(); rctx.moveTo(cssW, q); rctx.lineTo(cssW - 8, q - 5); rctx.lineTo(cssW - 8, q + 5); rctx.closePath(); rctx.fill();
+    });
+  }
+  function layout() {
+    if (!S.w) return;
+    var views = $("views"), avail = views.clientWidth, gap = 14, rw = 34;
+    var two = avail >= 520;
+    var colW = two ? (avail - gap - rw) / 2 : avail - rw;
+    var maxH = clamp(window.innerHeight * 0.74, 320, 760);
+    var sc = Math.min(colW / S.w, maxH / S.h, 2);
+    view.style.width = S.w * sc + "px"; view.style.height = S.h * sc + "px";
+    out.style.width = S.w * sc + "px"; out.style.height = out.height * sc + "px";
+    S.ds = 1 / sc;
+    drawRuler();
+  }
+  function renderReadout() {
+    var p = S.p, a = S.ev.filter(function (x) { return x.id === S.adopted; })[0];
+    $("kBig").innerHTML = "<small>×</small>" + fmt(p.k);
+    var st = $("kState"), words = $("kWords"), srcEl = $("kSrc");
+    st.className = "state" + (a ? (a.kind === "body" ? " prior" : " backed") : "");
+    st.textContent = a ? (a.kind === "body" ? "仅凭统计" : "有依据") : "手动";
+    var pct = Math.round((p.k - 1) * 100);
+    words.textContent = Math.abs(p.k - 1) < 0.03 ? "看不出拉伸" : pct > 0 ? "下半截被拉长约 " + pct + "%" : "下半截被压短约 " + (-pct) + "%";
+    srcEl.textContent = a ? "来源：" + a.title + (a.lo != null ? "，区间 " + fmt(a.lo) + "–" + fmt(a.hi) : "") : "来源：手动调的，没有依据";
+    if (document.activeElement !== $("kNum")) $("kNum").value = fmt(p.k);
+    $("kRange").value = p.k;
+    if (document.activeElement !== $("y0Num")) $("y0Num").value = Math.round(p.y0);
+    if (document.activeElement !== $("y1Num")) $("y1Num").value = Math.round(p.y1);
+  }
+  function render() {
+    if (!S.w) return;
+    renderOut(); renderView(); drawRuler(); renderReadout();
+  }
+  function renderLists() {
+    var ev = $("evList"), html = "";
+    S.ev.forEach(function (e, i) {
+      html += '<li class="item' + (S.adopted === e.id ? " adopted" : "") + '" data-ev="' + e.id + '"><span class="n">' + (i + 1) + '</span>' +
+        '<span class="what">' + e.title + '<small>' + e.detail + (e.note ? "<br>" + e.note : "") + '</small></span>' +
+        '<span class="acts"><span class="kv">' + (e.k == null ? "–" : "×" + fmt(e.k)) + '</span>' +
+        (e.k != null && S.adopted !== e.id ? '<button type="button" class="mini" data-adopt="' + e.id + '">采用</button>' : "") +
+        '<button type="button" class="mini x" data-del="' + e.id + '" aria-label="删除这条依据">删除</button></span></li>';
+    });
+    ev.innerHTML = html;
+    $("evEmpty").hidden = S.ev.length > 0;
+    $("evCount").textContent = S.ev.length ? S.ev.length + " 条" : "";
+    var cl = $("candList"), ch = "";
+    S.cands.forEach(function (c, i) {
+      var r = AF.kFromBox(c, S.p, 1), nm = c.type === "ellipse" ? "椭圆" : "矩形";
+      ch += '<li class="item cand" data-cand="' + i + '"><span class="n">' + String.fromCharCode(65 + i) + '</span>' +
+        '<span class="what">' + nm + " " + fmt(c.w, 0) + "×" + fmt(c.h, 0) + " px" +
+        '<small>高÷宽 ' + fmt(c.ratio) + (r.k == null ? "，不在拉伸带里（可当对照）" : r.k < 0.97 ? "。按正方形算会小于 1，它多半本来就是扁的" : "") + '</small></span>' +
+        '<span class="acts">' + (r.k != null ? '<span class="kv">×' + fmt(r.k) + '</span><button type="button" class="mini" data-use="' + i + '">它本来是' + (c.type === "ellipse" ? "正圆" : "正方形") + '</button>' : "") + '</span></li>';
+    });
+    cl.innerHTML = ch;
+  }
+
+  /* ------------------------------------------------------------ auto scan */
+  function scan() {
+    if (!S.w) return;
+    var g = getGray(), p = S.p;
+    S.ev = S.ev.filter(function (e) { return e.kind !== "repeat"; });
+    var r = AF.findRepeatCandidates(g.b, S.w, S.h, Math.round(p.y0), Math.round(p.y1)), rep = null;
+    var strong = r.clusters.filter(function (c) { return c.n >= 2; }).slice(0, 3), reps = [];
+    strong.forEach(function (c) { reps.push({ kind: "repeat", k: c.k, rlo: c.lo, rhi: c.hi, n: c.n, x0: c.x0, x1: c.x1, strips: c.strips, y0At: p.y0 }); });
+    if (!reps.length && r.cands.length) { var c0 = r.cands[0]; reps.push({ kind: "repeat", k: c0.k, n: 1, x0: c0.x0, x1: c0.x1, strips: [c0], y0At: p.y0 }); }
+    rep = reps[0] || null;
+    var shapes = AF.findShapeCandidates(g.g, S.w, S.h, {});
+    shapes.forEach(function (c) { var q = AF.kFromBox(c, p, 1).k; c.inBand = q != null; c.plaus = q != null && q > 1.03 && q < 2.4; });
+    shapes.sort(function (a, b) { return (b.plaus - a.plaus) || (b.inBand - a.inBand) || (b.score - a.score); });
+    // keep shapes that could be a stretched square or circle, plus a couple outside the band as controls
+    var keep = shapes.filter(function (c) { return c.plaus; }).slice(0, 5);
+    S.cands = keep.concat(shapes.filter(function (c) { return !c.inBand; }).slice(0, 2));
+    var conflict = reps.length > 1;
+    // identical periods above and below can be a real "no stretch" or just the codec's block grid: never auto-adopt
+    var flat = rep && Math.abs(rep.k - 1) < 0.03;
+    reps.forEach(function (q) { addEv(q, !conflict && !flat && q.n > 1); });
+    var nIn = S.cands.filter(function (c) { return c.inBand; }).length, msg = [];
+    if (conflict) msg.push("重复结构给出了互相矛盾的倍数（" + reps.map(function (q) { return "×" + fmt(q.k); }).join("、") + "），画面多半是几块拼成的。先用“只留一块画面”框出被拉伸的那块，再找一次");
+    else if (flat) msg.push("重复结构上下周期相同（×" + fmt(rep.k) + "）：可能没拉伸，也可能只是视频压缩的块网格，没自动采用");
+    else if (rep) msg.push("重复结构：" + rep.n + " 条竖带，估计 ×" + fmt(rep.k) + (rep.n > 1 ? "，已采用" : "（只有一条，没自动采用）"));
+    if (S.cands.length) msg.push("形状候选 " + S.cands.length + " 个（" + nIn + " 个在拉伸带里），请确认哪个本来是正方形或正圆");
+    if (!msg.length) msg.push("没找到可用的参照物。可以手动框选、量间距，或者用人体比例");
+    hint(msg.join("；") + "。", conflict || (!rep && !nIn));
+    renderLists(); render();
+  }
+
+  /* ------------------------------------------------------------ pose model (optional) */
+  /* MediaPipe Pose, loaded on demand: first from ./vendor/pose/ (if the site ships it),
+     then from jsDelivr. If neither loads, the manual three-point tool still works. */
+  var POSE_VER = "0.5.1675469404";
+  var POSE_BASES = ["vendor/pose/", "https://cdn.jsdelivr.net/npm/@mediapipe/pose@" + POSE_VER + "/"];
+  var Pz = { pose: null, state: "idle", last: null, loading: null };
+  var maskC = document.createElement("canvas"), maskX = maskC.getContext("2d", { willReadFrequently: true });
+  function poseStatus(t) { $("poseState").textContent = t; }
+  function loadScript(url) {
+    return new Promise(function (res, rej) {
+      var el = document.createElement("script"); el.src = url; el.onload = res;
+      el.onerror = function () { el.remove(); rej(new Error("script")); }; document.head.appendChild(el);
+    });
+  }
+  function withTimeout(pr, ms) {
+    return new Promise(function (res, rej) { var t = setTimeout(function () { rej(new Error("timeout")); }, ms); pr.then(function (v) { clearTimeout(t); res(v); }, function (e) { clearTimeout(t); rej(e); }); });
+  }
+  function onPose(r) {
+    var lm = r.poseLandmarks;
+    if (!lm) { Pz.last = null; return; }
+    var out = { lm: lm.map(function (q) { return { x: q.x * S.w, y: q.y * S.h, v: q.visibility == null ? 1 : q.visibility }; }), top: null };
+    if (r.segmentationMask) {
+      try {
+        var W = 192, H = Math.max(8, Math.round(192 * S.h / S.w));
+        maskC.width = W; maskC.height = H; maskX.clearRect(0, 0, W, H); maskX.drawImage(r.segmentationMask, 0, 0, W, H);
+        var d = maskX.getImageData(0, 0, W, H).data, thr = Math.max(2, Math.round(W * 0.012));
+        for (var y = 0; y < H && out.top == null; y++) { var c = 0; for (var x = 0; x < W; x++) if (d[(y * W + x) * 4] > 127) c++; if (c >= thr) out.top = (y + 0.5) * S.h / H; }
+      } catch (e) {}
+    }
+    Pz.last = out;
+  }
+  function ensurePose() {
+    if (Pz.pose) return Promise.resolve(Pz.pose);
+    if (Pz.state === "failed") return Promise.reject(new Error("pose unavailable"));
+    if (Pz.loading) return Pz.loading;
+    poseStatus("人体识别：正在加载模型（约 10 MB，只需一次）");
+    function tryBase(i) {
+      if (i >= POSE_BASES.length) return Promise.reject(new Error("pose unavailable"));
+      var base = POSE_BASES[i];
+      return (window.Pose ? Promise.resolve() : loadScript(base + "pose.js")).then(function () {
+        var pose = new window.Pose({ locateFile: function (f) { return base + f; } });
+        pose.setOptions({ modelComplexity: 1, smoothLandmarks: false, enableSegmentation: true, minDetectionConfidence: 0.4, minTrackingConfidence: 0.4 });
+        pose.onResults(onPose);
+        return withTimeout(pose.initialize(), 25000).then(function () { return pose; });
+      }).catch(function () { return tryBase(i + 1); });
+    }
+    Pz.loading = tryBase(0).then(function (pose) { Pz.pose = pose; Pz.state = "ready"; Pz.loading = null; poseStatus("人体识别：可用"); return pose; },
+      function (e) { Pz.state = "failed"; Pz.loading = null; poseStatus("人体识别：这个环境加载不了模型，请用“人体比例”手动点三个点"); throw e; });
+    return Pz.loading;
+  }
+  /* Run the model on the current frame. fresh=true forgets the previous frame (still images). */
+  function detectPose(fresh) {
+    return ensurePose().then(function (pose) {
+      if (fresh) pose.reset();
+      Pz.last = null;
+      return withTimeout(pose.send({ image: src }), 60000).then(function () { return Pz.last; });
+    });
+  }
+  function meanVis(lm, ids) { var a = ids.filter(function (i) { return lm[i].v > 0.5; }); if (!a.length) a = ids; return a; }
+  function bodyFromPose(r) {
+    var lm = r.lm, sh = (lm[11].y + lm[12].y) / 2, hip = (lm[23].y + lm[24].y) / 2;
+    var kn = meanVis(lm, [25, 26]), ft = [29, 30, 31, 32];
+    var K = kn.reduce(function (a, i) { return a + lm[i].y; }, 0) / kn.length, Kx = kn.reduce(function (a, i) { return a + lm[i].x; }, 0) / kn.length;
+    var Sy = Math.max.apply(null, ft.map(function (i) { return lm[i].y; })), Sx = ft.reduce(function (a, i) { return a + lm[i].x; }, 0) / ft.length;
+    var H = r.top != null ? r.top : lm[0].y - 0.55 * (sh - lm[0].y);
+    return { H: H, K: K, S: Math.min(Sy, S.h), px: [lm[0].x, Kx, Sx], sh: sh, hip: hip, cut: Sy > S.h - 6 };
+  }
+  /* Boundary suggestion: a period jump in a repeating background if there is a solid one
+     (kept only if it falls between chest and knees when a body was found); otherwise hip height. */
+  function suggestBoundary(body) {
+    var g = getGray(), cl = AF.findBoundary(g.b, S.w, S.h) || [];
+    var pick = cl.filter(function (c) { return c.strong && (!body || (c.y0 >= body.sh + 0.3 * (body.hip - body.sh) && c.y0 <= body.K)); })[0];
+    if (pick) return { y0: pick.y0, how: "texture", k: pick.k, n: pick.n };
+    if (body) return { y0: body.hip, how: "pose" };
+    return null;
+  }
+  function autoAll() {
+    if (!S.w || S.busy) return;
+    S.busy = true; $("autoBtn").disabled = true;
+    if (S.kind === "video") video.pause();
+    hint("正在分析：识别人体、找分界线、找参照物…");
+    detectPose(true).catch(function () { return null; }).then(function (r) {
+      return new Promise(function (res) { setTimeout(function () { res(r); }, 30); });
+    }).then(function (r) {
+      var body = r ? bodyFromPose(r) : null, sug = suggestBoundary(body), notes = [];
+      S.ev = S.ev.filter(function (e) { return !(e.kind === "body" && e.auto); });
+      if (sug) {
+        S.p.y0 = clamp(Math.round(sug.y0), 1, S.p.y1 - 8); recomputeAll();
+        notes.push(sug.how === "texture" ? "分界线按背景周期突变定在 " + S.p.y0 + "（" + sug.n + " 条竖带一致）" : "背景里没有可靠的周期突变，分界线先按胯部粗略放在 " + S.p.y0 + "，请拖准");
+      } else notes.push("没找到分界线的线索，请手动拖");
+      scan();
+      var scanMsg = $("hint").textContent;
+      if (body) {
+        var eb = addEv({ kind: "body", auto: true, H: body.H, J: body.K, S: body.S, px: body.px, which: "knee" }, false);
+        if (eb.k != null) {
+          if (S.adopted == null) adopt(eb.id);
+          notes.push("人体比例估计 ×" + fmt(eb.k) + "（" + fmt(eb.lo) + "–" + fmt(eb.hi) + "）" + (body.cut ? "，脚被画面截断了，结果偏小" : ""));
+        }
+      } else if (Pz.state === "failed") notes.push("人体模型加载不了，人体比例请手动点三个点");
+      else notes.push("没识别到人体");
+      hint(notes.join("；") + "。" + scanMsg, !sug);
+    }).catch(function (e) { hint("自动分析出错：" + (e && e.message || e), true); })
+      .then(function () { S.busy = false; $("autoBtn").disabled = false; });
+  }
+  /* Tracking filters: the band follows the body. Keep the boundary at a fixed offset from the hips. */
+  var trackBusy = false;
+  function trackStep() {
+    if (!S.track || trackBusy || !Pz.pose) return;
+    trackBusy = true;
+    detectPose(false).then(function (r) {
+      if (r && S.track) { var hip = (r.lm[23].y + r.lm[24].y) / 2; S.p.y0 = clamp(Math.round(hip + S.trackOff), 1, S.p.y1 - 8); if (video.paused) render(); }
+    }).catch(function () {}).then(function () { trackBusy = false; });
+  }
+  function setTrack(on) {
+    if (!on) { S.track = false; $("track").checked = false; return; }
+    hint("正在识别人体，用来让分界线跟着胯部走…");
+    detectPose(true).then(function (r) {
+      if (!r) { hint("这一帧没识别到人体，没法跟随。", true); $("track").checked = false; return; }
+      S.trackOff = S.p.y0 - (r.lm[23].y + r.lm[24].y) / 2; S.track = true;
+      hint("分界线会保持在胯部" + (S.trackOff >= 0 ? "下方 " : "上方 ") + Math.abs(Math.round(S.trackOff)) + " px。这是实验功能，还没在真正的跟踪特效上验证过。");
+    }).catch(function () { hint("人体模型加载不了，没法跟随。", true); $("track").checked = false; });
+  }
+
+  /* ------------------------------------------------------------ tools */
+  function setMode(m) {
+    S.mode = S.mode === m ? "idle" : m; S.draft = null; S.pts = []; S.gapA = null;
+    TOOLS.forEach(function (id) { $(id).classList.toggle("on", $(id).dataset.mode === S.mode); });
+    if (S.mode === "rect") hint("在原画面上拖一个框，套住本来是方形的东西。");
+    else if (S.mode === "ellipse") hint("拖一个框，让椭圆贴住球或圆形物体的轮廓。");
+    else if (S.mode === "gap") hint("第一段：在分界线上方，竖着拖过几个重复单元（比如 5 条砖缝）。");
+    else if (S.mode === "body") hint("依次点三个点：头顶 → " + ($("joint").value === "knee" ? "膝盖中心" : "裆部") + " → 脚底。");
+    else if (S.mode === "crop") hint("拖一个框，只留下被拉伸的那块画面。之前的依据会清空。");
+    else idleHint();
+    render();
+  }
+  function pos(e) {
+    var r = view.getBoundingClientRect();
+    return { x: clamp((e.clientX - r.left) * S.w / r.width, 0, S.w), y: clamp((e.clientY - r.top) * S.h / r.height, 0, S.h) };
+  }
+  function nearLine(y) {
+    var t = 11 * S.ds;
+    if (!S.toBottom && Math.abs(y - S.p.y1) < t) return "y1";
+    if (Math.abs(y - S.p.y0) < t) return "y0";
+    return null;
+  }
+  function hitBodyPoint(q) {
+    var t = 12 * S.ds, hit = null;
+    S.ev.forEach(function (e) {
+      if (e.kind !== "body") return;
+      [e.H, e.J, e.S].forEach(function (y, i) { if (Math.abs(q.y - y) < t && Math.abs(q.x - e.px[i]) < t) hit = { e: e, i: i }; });
+    });
+    return hit;
+  }
+  function setY0(y) { S.p.y0 = clamp(Math.round(y), 1, S.p.y1 - 8); recomputeAll(); renderLists(); render(); }
+  function setY1(y) { S.p.y1 = clamp(Math.round(y), S.p.y0 + 8, S.h); recomputeAll(); renderLists(); render(); }
+
+  view.addEventListener("pointerdown", function (e) {
+    if (!S.w || S.recording) return;
+    var q = pos(e); view.setPointerCapture(e.pointerId);
+    if (S.mode === "idle") {
+      var hp = hitBodyPoint(q);
+      if (hp) { S.drag = hp; return; }
+      var ln = nearLine(q.y); if (ln) S.drag = ln; return;
+    }
+    if (S.mode === "rect" || S.mode === "ellipse" || S.mode === "crop") S.draft = { sx: q.x, sy: q.y, box: { x: q.x, y: q.y, w: 0, h: 0 } };
+    else if (S.mode === "gap") S.draft = { seg: { x: q.x, ya: q.y, yb: q.y } };
+  });
+  view.addEventListener("pointermove", function (e) {
+    if (!S.w) return;
+    var q = pos(e);
+    if (S.drag && S.drag.e) {
+      var de = S.drag.e, key = ["H", "J", "S"][S.drag.i];
+      de[key] = q.y; de.px[S.drag.i] = q.x; computeEv(de);
+      if (S.adopted === de.id && de.k != null) S.p.k = clamp(de.k, 0.4, 4);
+      renderLists(); render(); return;
+    }
+    if (S.drag === "y0") return setY0(q.y);
+    if (S.drag === "y1") return setY1(q.y);
+    if (S.mode === "idle") { view.style.cursor = hitBodyPoint(q) ? "grab" : nearLine(q.y) ? "ns-resize" : "default"; return; }
+    view.style.cursor = "crosshair";
+    if (!S.draft) return;
+    if (S.draft.box) S.draft.box = { x: Math.min(S.draft.sx, q.x), y: Math.min(S.draft.sy, q.y), w: Math.abs(q.x - S.draft.sx), h: Math.abs(q.y - S.draft.sy) };
+    if (S.draft.seg) S.draft.seg.yb = q.y;
+    renderView();
+  });
+  function endPointer(e) {
+    if (!S.w) return;
+    var q = pos(e);
+    if (S.drag) { S.drag = null; return; }
+    if (S.mode === "crop") {
+      var cd = S.draft; S.draft = null;
+      if (!cd || cd.box.w < 40 || cd.box.h < 40) { hint("框太小了，再拖大一点。", true); renderView(); return; }
+      applyCrop(cd.box); return;
+    }
+    if (S.mode === "rect" || S.mode === "ellipse") {
+      var d = S.draft; S.draft = null;
+      if (!d || d.box.w < 8 * S.ds || d.box.h < 8 * S.ds) { renderView(); return; }
+      var b = d.box, g = getGray();
+      if ($("snap").checked) b = S.mode === "rect" ? AF.snapRect(g.b, S.w, S.h, b) : AF.snapEllipse(g.b, S.w, S.h, b, Math.max(3, 0.03 * Math.min(b.w, b.h)));
+      var tr = parseFloat($("trueRatio").value) || 1;
+      var ev = addEv({ kind: "box", shape: S.mode, box: { x: b.x, y: b.y, w: b.w, h: b.h }, tr: tr }, true);
+      hint(ev.k == null ? ev.note : "量到高÷宽 " + fmt(b.h / b.w) + "，估计 ×" + fmt(ev.k) + "，已采用。框得不准可以关掉“吸附边缘”重框。", ev.k == null);
+      setModeSilently("idle");
+    } else if (S.mode === "gap") {
+      var s = S.draft && S.draft.seg; S.draft = null;
+      if (!s || Math.abs(s.yb - s.ya) < 6 * S.ds) { renderView(); return; }
+      s = { x: s.x, ya: Math.min(s.ya, s.yb), yb: Math.max(s.ya, s.yb) };
+      if (!S.gapA) { S.gapA = s; hint("第二段：在拉伸带里，拖过同样数量的重复单元。"); renderView(); return; }
+      var A = S.gapA, B = s; S.gapA = null;
+      if ((A.ya + A.yb) > (B.ya + B.yb)) { var t = A; A = B; B = t; }
+      var eg = addEv({ kind: "gap", A: A, B: B }, true);
+      hint(eg.k == null ? eg.note : "两段相比，估计 ×" + fmt(eg.k) + "，已采用。", eg.k == null);
+      setModeSilently("idle");
+    } else if (S.mode === "body") {
+      S.pts.push(q);
+      var names = ["头顶", $("joint").value === "knee" ? "膝盖中心" : "裆部", "脚底"];
+      if (S.pts.length < 3) { hint("已点 " + names[S.pts.length - 1] + "，接着点 " + names[S.pts.length] + "。"); renderView(); return; }
+      var P = S.pts.slice().sort(function (a, c) { return a.y - c.y; }); S.pts = [];
+      var eb = addEv({ kind: "body", H: P[0].y, J: P[1].y, S: P[2].y, px: [P[0].x, P[1].x, P[2].x], which: $("joint").value }, false);
+      hint(eb.k == null ? eb.note : "按人群中位比例，估计 ×" + fmt(eb.k) + "（" + fmt(eb.lo) + "–" + fmt(eb.hi) + "）。这只是统计，没有自动采用。", eb.k == null);
+      setModeSilently("idle");
+    }
+  }
+  function setModeSilently(m) {
+    S.mode = m; S.draft = null;
+    TOOLS.forEach(function (id) { $(id).classList.toggle("on", $(id).dataset.mode === S.mode); });
+    render();
+  }
+  view.addEventListener("pointerup", endPointer);
+  view.addEventListener("pointercancel", function () { S.drag = null; S.draft = null; renderView(); });
+  document.addEventListener("keydown", function (e) { if (e.key === "Escape" && S.mode !== "idle") setMode(S.mode); });
+
+  TOOLS.forEach(function (id) { $(id).addEventListener("click", function () { setMode($(id).dataset.mode); }); });
+  $("scanBtn").addEventListener("click", scan);
+  $("autoBtn").addEventListener("click", autoAll);
+  $("track").addEventListener("change", function () { setTrack(this.checked); });
+  $("uncrop").addEventListener("click", clearCrop);
+  $("kRange").addEventListener("input", function () { setK(parseFloat(this.value)); });
+  $("kNum").addEventListener("change", function () { var v = parseFloat(this.value); if (isFinite(v)) setK(v); });
+  $("y0Num").addEventListener("change", function () { var v = parseFloat(this.value); if (isFinite(v)) setY0(v); });
+  $("y1Num").addEventListener("change", function () { var v = parseFloat(this.value); if (isFinite(v)) setY1(v); });
+  $("toBottom").addEventListener("change", function () {
+    S.toBottom = this.checked; $("y1Num").hidden = S.toBottom;
+    S.p.y1 = S.toBottom ? S.h : Math.round(Math.min(S.h, S.p.y0 + (S.h - S.p.y0) * 0.85));
+    recomputeAll(); renderLists(); render();
+  });
+  $("evList").addEventListener("click", function (e) {
+    var t = e.target;
+    if (t.dataset.adopt) adopt(+t.dataset.adopt);
+    else if (t.dataset.del) {
+      var id = +t.dataset.del; S.ev = S.ev.filter(function (x) { return x.id !== id; });
+      if (S.adopted === id) S.adopted = null; renderLists(); render();
+    }
+  });
+  $("candList").addEventListener("click", function (e) {
+    var t = e.target; if (t.dataset.use == null) return;
+    var c = S.cands[+t.dataset.use]; if (!c) return;
+    S.cands.splice(+t.dataset.use, 1);
+    var ev = addEv({ kind: "box", shape: c.type, box: { x: c.x, y: c.y, w: c.w, h: c.h }, tr: 1, auto: false }, true);
+    hint("按“它本来是" + (c.type === "ellipse" ? "正圆" : "正方形") + "”算，估计 ×" + fmt(ev.k) + "，已采用。");
+  });
+  function hoverFrom(list, key, prefix) {
+    list.addEventListener("pointerover", function (e) {
+      var li = e.target.closest ? e.target.closest("li") : null, v = li ? prefix + li.dataset[key] : null;
+      if (v !== S.hover) { S.hover = v; renderView(); }
+    });
+    list.addEventListener("pointerleave", function () { if (S.hover) { S.hover = null; renderView(); } });
+  }
+  hoverFrom($("evList"), "ev", "e"); hoverFrom($("candList"), "cand", "c");
+
+  /* ------------------------------------------------------------ loading */
+  function resetWork(w, h) {
+    S.w = w; S.h = h; src.width = w; src.height = h;
+    S.p = { y0: Math.round(h * 0.5), y1: h, k: 1 }; S.toBottom = true; $("toBottom").checked = true; $("y1Num").hidden = true;
+    S.ev = []; S.cands = []; S.adopted = null; S.gray = null; S.mode = "idle"; S.pts = []; S.gapA = null; S.draft = null;
+    $("y0Num").max = h; $("y1Num").max = h;
+    $("uncrop").hidden = !S.crop; S.track = false; $("track").checked = false;
+    TOOLS.forEach(function (id) { $(id).classList.remove("on"); });
+  }
+  function resetFor(w, h, kind, name) {
+    S.kind = kind; S.name = name; S.isDemo = false; S.bw = w; S.bh = h; S.crop = null;
+    resetWork(w, h);
+    $("transport").hidden = kind !== "video"; $("saveVid").hidden = kind !== "video"; $("trackRow").hidden = kind !== "video";
+    $("demoTag").hidden = true;
+  }
+  function keepBase() { base.width = S.bw; base.height = S.bh; bctx.drawImage(src, 0, 0); }
+  function redrawFromBase() {
+    var c = S.crop || { x: 0, y: 0, w: S.bw, h: S.bh };
+    if (S.kind === "video") drawFrame(); else sctx.drawImage(base, c.x, c.y, c.w, c.h, 0, 0, S.w, S.h);
+    S.gray = null;
+  }
+  function applyCrop(b) {
+    var o = S.crop || { x: 0, y: 0 };
+    var c = { x: Math.round(o.x + b.x), y: Math.round(o.y + b.y), w: Math.round(b.w), h: Math.round(b.h) };
+    c.w = Math.min(c.w, S.bw - c.x); c.h = Math.min(c.h, S.bh - c.y);
+    S.crop = c; resetWork(c.w, c.h); redrawFromBase(); renderLists(); layout(); render();
+    hint("已只留这一块。拖分界线，再找参照物。");
+  }
+  function clearCrop() { S.crop = null; resetWork(S.bw, S.bh); redrawFromBase(); renderLists(); layout(); render(); idleHint(); }
+  function fitSize(w, h, cap) { var s = Math.min(1, cap / Math.max(w, h)); return [Math.max(2, Math.round(w * s)), Math.max(2, Math.round(h * s))]; }
+  function loadImageFile(file) {
+    var url = URL.createObjectURL(file), img = new Image();
+    img.onload = function () {
+      var sz = fitSize(img.naturalWidth, img.naturalHeight, 2400);
+      stopVideo(); resetFor(sz[0], sz[1], "image", file.name.replace(/\.[^.]+$/, ""));
+      sctx.drawImage(img, 0, 0, sz[0], sz[1]); URL.revokeObjectURL(url); keepBase();
+      renderLists(); layout(); render(); idleHint();
+    };
+    img.onerror = function () { URL.revokeObjectURL(url); hint("这张图片打不开。换成 JPG、PNG 或 WebP 再试。", true); };
+    img.src = url;
+  }
+  function stopVideo() { try { video.pause(); } catch (e) {} if (video.src) { URL.revokeObjectURL(video.src); video.removeAttribute("src"); video.load(); } }
+  function loadVideoFile(file) {
+    stopVideo();
+    var url = URL.createObjectURL(file);
+    video.onloadeddata = function () {
+      video.onloadeddata = null;
+      var sz = fitSize(video.videoWidth, video.videoHeight, 1920);
+      resetFor(sz[0], sz[1], "video", file.name.replace(/\.[^.]+$/, ""));
+      drawFrame(); renderLists(); layout(); render(); idleHint();
+      try { video.currentTime = Math.min(0.05, video.duration || 0); } catch (e) {}
+    };
+    video.onerror = function () { hint("这个视频浏览器解不了码。常见的 MP4（H.264）和 WebM 可以。", true); };
+    video.muted = true; video.src = url; video.load();
+  }
+  function drawFrame() {
+    if (S.kind !== "video" || !video.videoWidth) return;
+    var c = S.crop;
+    if (!c) sctx.drawImage(video, 0, 0, S.w, S.h);
+    else { var fx = video.videoWidth / S.bw, fy = video.videoHeight / S.bh; sctx.drawImage(video, c.x * fx, c.y * fy, c.w * fx, c.h * fy, 0, 0, S.w, S.h); }
+    S.gray = null;
+  }
+  function tfmt(t) { t = Math.max(0, t || 0); return Math.floor(t / 60) + ":" + ("0" + Math.floor(t % 60)).slice(-2); }
+  function updTransport() {
+    if (S.kind !== "video") return;
+    var d = video.duration || 0;
+    if (document.activeElement !== $("seek")) $("seek").value = d ? Math.round((video.currentTime / d) * 1000) : 0;
+    $("timeTxt").textContent = tfmt(video.currentTime) + " / " + tfmt(d);
+    $("playBtn").textContent = video.paused ? "播放" : "暂停";
+  }
+  video.addEventListener("seeked", function () { drawFrame(); render(); updTransport(); if (S.track) trackStep(); });
+  video.addEventListener("pause", updTransport); video.addEventListener("play", updTransport);
+  (function loop() {
+    if (S.kind === "video" && !video.paused && !video.ended) { drawFrame(); if (S.track) trackStep(); renderOut(); renderView(); updTransport(); }
+    requestAnimationFrame(loop);
+  })();
+  $("playBtn").addEventListener("click", function () { if (S.recording) return; if (video.paused) { var pr = video.play(); if (pr && pr.catch) pr.catch(function () {}); } else video.pause(); });
+  $("seek").addEventListener("input", function () { if (S.recording) return; var d = video.duration || 0; if (d) video.currentTime = (this.value / 1000) * d; });
+
+  function openFile(file) {
+    if (!file) return;
+    if (/^video\//.test(file.type)) loadVideoFile(file);
+    else if (/^image\//.test(file.type)) loadImageFile(file);
+    else hint("只支持图片和视频文件。", true);
+  }
+  $("openBtn").addEventListener("click", function () { $("file").click(); });
+  $("file").addEventListener("change", function () { openFile(this.files[0]); this.value = ""; });
+  var stage = $("stage");
+  stage.addEventListener("dragover", function (e) { e.preventDefault(); stage.classList.add("drop"); });
+  stage.addEventListener("dragleave", function () { stage.classList.remove("drop"); });
+  stage.addEventListener("drop", function (e) { e.preventDefault(); stage.classList.remove("drop"); openFile(e.dataTransfer.files[0]); });
+  window.addEventListener("resize", function () { layout(); renderView(); });
+
+  /* ------------------------------------------------------------ export */
+  function saveBlob(blob, filename) {
+    function viaAnchor() {
+      var a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = filename;
+      document.body.appendChild(a); a.click(); a.remove(); setTimeout(function () { URL.revokeObjectURL(a.href); }, 20000);
+      return "anchor";
+    }
+    if (!(window.claude && window.claude.use)) return Promise.resolve(viaAnchor());
+    return window.claude.use("downloads").then(function (d) {
+      if (!d) return "none";
+      return d.save({ filename: filename, data: blob }).then(function () { return "saved"; }, function (err) { return err && err.code === "declined" ? "declined" : "none"; });
+    }, function () { return "none"; });
+  }
+  function exportNote(r) {
+    $("exportMsg").textContent = r === "none" ? "这个页面所在的环境不允许保存文件。把页面放到自己的站点上打开就能保存。"
+      : r === "declined" ? "已取消保存。" : "已交给浏览器保存。导出的是按估计倍数压回去的画面，不是原片。";
+  }
+  function baseName() { return (S.name || "画面").replace(/[\\/:*?"<>|]/g, "_").slice(0, 60) + "-还原x" + fmt(S.p.k); }
+  $("savePng").addEventListener("click", function () {
+    if (!S.w) return;
+    out.toBlob(function (b) { if (!b) return exportNote("none"); saveBlob(b, baseName() + ".png").then(exportNote); }, "image/png");
+  });
+  $("saveVid").addEventListener("click", function () {
+    if (S.recording) { if (S.stopRec) S.stopRec(); return; }
+    if (S.kind !== "video") return;
+    if (!out.captureStream || !window.MediaRecorder) { $("exportMsg").textContent = "这个浏览器不支持录制画布。用桌面版 Chrome 或 Edge 可以。"; return; }
+    var mime = ["video/webm;codecs=vp9,opus", "video/webm;codecs=vp8,opus", "video/webm", "video/mp4"].filter(function (m) { return MediaRecorder.isTypeSupported(m); })[0];
+    if (!mime) { $("exportMsg").textContent = "这个浏览器没有可用的录制格式。"; return; }
+    var stream = out.captureStream(30);
+    try { var cs = video.captureStream || video.mozCaptureStream; if (cs) cs.call(video).getAudioTracks().forEach(function (t) { stream.addTrack(t); }); } catch (e) {}
+    var rec, chunks = [];
+    try { rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 6e6 }); } catch (e) { $("exportMsg").textContent = "录制启动失败：" + e.message; return; }
+    rec.ondataavailable = function (ev) { if (ev.data && ev.data.size) chunks.push(ev.data); };
+    rec.onstop = function () {
+      S.recording = false; S.stopRec = null; $("saveVid").textContent = "录制还原视频"; video.muted = true;
+      var blob = new Blob(chunks, { type: mime.split(";")[0] });
+      if (!blob.size) { $("exportMsg").textContent = "没录到内容。"; return; }
+      saveBlob(blob, baseName() + (mime.indexOf("mp4") >= 0 ? ".mp4" : ".webm")).then(exportNote);
+    };
+    S.recording = true; $("saveVid").textContent = "停止并保存";
+    $("exportMsg").textContent = "正在按原速录制，时长等于视频时长。录制时别切走这个页面。";
+    var finish = function () { video.removeEventListener("ended", finish); video.pause(); if (rec.state !== "inactive") rec.stop(); };
+    S.stopRec = finish; video.addEventListener("ended", finish);
+    video.pause(); video.muted = false;
+    var go = function () { video.removeEventListener("seeked", go); rec.start(250); var pr = video.play(); if (pr && pr.catch) pr.catch(function () { video.muted = true; video.play(); }); };
+    if (video.currentTime < 0.05) go(); else { video.addEventListener("seeked", go); video.currentTime = 0; }
+  });
+
+  /* ------------------------------------------------------------ built-in example */
+  function rng(seed) { return function () { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; }; }
+  function demoScene() {
+    var W = 540, H = 960, c = document.createElement("canvas"); c.width = W; c.height = H;
+    var x = c.getContext("2d"), R = rng(7), i, j;
+    // brick wall: 16 px courses
+    x.fillStyle = "#8f9094"; x.fillRect(0, 0, W, 700);
+    for (j = 0; j < 44; j++) for (i = -1; i < 12; i++) {
+      var bx = i * 50 + (j % 2 ? 25 : 0), by = j * 16, v = 150 + Math.floor(R() * 34);
+      x.fillStyle = "rgb(" + v + "," + (v - 2) + "," + (v - 8) + ")"; x.fillRect(bx + 1, by + 2, 48, 14);
+    }
+    // floor
+    var fg = x.createLinearGradient(0, 700, 0, H); fg.addColorStop(0, "#a99b90"); fg.addColorStop(1, "#c3b3a4");
+    x.fillStyle = fg; x.fillRect(0, 700, W, H - 700);
+    for (i = 0; i < 900; i++) { x.fillStyle = "rgba(60,50,45," + (0.05 + R() * 0.1) + ")"; x.fillRect(R() * W, 700 + R() * (H - 700), 1 + R() * 2, 1 + R()); }
+    // window (a real non-square, above the boundary: a decoy)
+    x.fillStyle = "#e9edf0"; x.fillRect(38, 150, 114, 164); x.fillStyle = "#58747c"; x.fillRect(44, 156, 102, 152);
+    x.fillStyle = "#e9edf0"; x.fillRect(93, 156, 4, 152);
+    // socket: 46 x 46 square
+    x.fillStyle = "#6f6f72"; x.fillRect(397, 587, 52, 52); x.fillStyle = "#f4f4f1"; x.fillRect(400, 590, 46, 46);
+    x.fillStyle = "#3a3a3c"; x.fillRect(413, 602, 4, 9); x.fillRect(429, 602, 4, 9); x.fillRect(421, 620, 4, 8);
+    // stone ball: r = 44
+    x.fillStyle = "#77706a"; x.fillRect(408, 838, 64, 30);
+    var bg = x.createRadialGradient(428, 784, 6, 440, 800, 46); bg.addColorStop(0, "#dedbd6"); bg.addColorStop(1, "#8c8782");
+    x.fillStyle = bg; x.beginPath(); x.arc(440, 800, 44, 0, 7); x.fill(); x.strokeStyle = "#57524e"; x.lineWidth = 2; x.stroke();
+    // mannequin, stature 620: head top 280, knee 728 (0.277), crotch 602 (0.481), sole 900
+    var skin = "#e3b79a", cx = 250;
+    function quad(a, col) { x.fillStyle = col; x.beginPath(); x.moveTo(a[0], a[1]); for (var q = 2; q < a.length; q += 2) x.lineTo(a[q], a[q + 1]); x.closePath(); x.fill(); }
+    quad([212, 600, 247, 600, 241, 884, 221, 884], skin); quad([253, 600, 288, 600, 279, 884, 259, 884], skin);
+    x.fillStyle = "rgba(150,95,70,.55)"; x.beginPath(); x.ellipse(230, 728, 9, 6, 0, 0, 7); x.ellipse(270, 728, 9, 6, 0, 0, 7); x.fill();
+    quad([214, 880, 248, 880, 250, 900, 210, 900], "#22222a"); quad([252, 880, 286, 880, 290, 900, 250, 900], "#22222a");
+    x.strokeStyle = skin; x.lineWidth = 15; x.lineCap = "round";
+    x.beginPath(); x.moveTo(205, 400); x.lineTo(190, 590); x.moveTo(295, 400); x.lineTo(310, 590); x.stroke();
+    quad([203, 388, 297, 388, 288, 525, 212, 525], "#f2f1ec");
+    quad([208, 520, 292, 520, 306, 642, 194, 642], "#5d6470");
+    x.fillStyle = skin; x.fillRect(241, 356, 18, 34);
+    x.beginPath(); x.ellipse(cx, 320, 30, 40, 0, 0, 7); x.fill();
+    x.fillStyle = "#2a2422"; x.beginPath(); x.ellipse(cx, 304, 32, 26, 0, Math.PI, 0); x.fill();
+    return c;
+  }
+  function loadDemo() {
+    stopVideo();
+    var o = demoScene(), y0 = 560, k = 1.45, H = Math.round(y0 + (o.height - y0) * k);
+    resetFor(o.width, H, "image", "示例"); S.isDemo = true; $("demoTag").hidden = false;
+    sctx.imageSmoothingQuality = "high";
+    sctx.drawImage(o, 0, 0, o.width, y0, 0, 0, o.width, y0);
+    sctx.drawImage(o, 0, y0, o.width, o.height - y0, 0, y0, o.width, H - y0);
+    // a little sensor-style noise so the example is not pixel-perfect
+    var d = sctx.getImageData(0, 0, S.w, S.h), a = d.data, R = rng(11);
+    for (var i = 0; i < a.length; i += 4) { var n = (R() - 0.5) * 10; a[i] += n; a[i + 1] += n; a[i + 2] += n; }
+    sctx.putImageData(d, 0, 0); keepBase();
+    S.p.y0 = y0; layout(); scan();
+  }
+  $("demoBtn").addEventListener("click", loadDemo);
+
+  window.__huanyuan = { S: S, scan: scan, render: render, applyCrop: applyCrop, autoAll: autoAll, Pz: Pz };
+  loadDemo();
+})();
+
+</script>
+</body>
+</html>

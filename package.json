@@ -1,0 +1,8 @@
+{
+  "name": "unstretch",
+  "version": "0.4.0",
+  "description": "还原尺：量出并还原图片/视频里的纵向拉伸（拉腿）特效，纯前端",
+  "license": "GPL-3.0-only",
+  "private": true,
+  "scripts": { "build": "python3 build.py", "test": "node tests/synthetic.test.js" }
+}

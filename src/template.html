@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>还原尺</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=ZCOOL+QingKe+HuangYou&display=swap" rel="stylesheet">
+<style>
+/*__STYLE__*/
+</style>
+</head>
+<body>
+<header class="top">
+  <h1>还原<span>尺</span></h1>
+  <p class="lede">拉腿特效把画面下半截整条拉长，背景也跟着变形。在画面里找一把尺子，量出拉了多少倍，再压回去。</p>
+  <p class="privacy">文件只在本机浏览器里处理，不上传</p>
+</header>
+
+<main class="bench">
+  <section class="stage" id="stage" aria-label="画面">
+    <div class="views" id="views">
+      <figure class="fig">
+        <figcaption><b>原画面</b><span>在这里拖分界线、框参照物</span><span class="tag demo" id="demoTag" hidden>示例：程序生成，下半截被拉长了 1.45 倍</span></figcaption>
+        <div class="viewwrap"><canvas id="ruler" aria-hidden="true"></canvas><canvas id="view" aria-label="原画面，可拖动分界线"></canvas></div>
+      </figure>
+      <figure class="fig">
+        <figcaption><b>还原预览</b><span class="tag">估计值，不是原片</span></figcaption>
+        <canvas id="out" aria-label="还原预览"></canvas>
+      </figure>
+    </div>
+    <div class="hint" id="hint" role="status" aria-live="polite"></div>
+    <div class="transport" id="transport" hidden>
+      <button type="button" id="playBtn">播放</button>
+      <input type="range" id="seek" min="0" max="1000" value="0" aria-label="视频进度">
+      <span class="t" id="timeTxt">0:00 / 0:00</span>
+    </div>
+  </section>
+
+  <aside class="panel">
+    <section class="card">
+      <div class="readout">
+        <div class="kbig" id="kBig"><small>×</small>1.00</div>
+        <div class="kmeta">
+          <span class="state" id="kState">手动</span>
+          <div id="kWords">还没有估计</div>
+          <div class="src" id="kSrc"></div>
+        </div>
+      </div>
+      <div class="row">
+        <label for="kRange">拉伸倍数</label>
+        <input type="range" id="kRange" min="0.6" max="2.4" step="0.005" value="1">
+        <input class="num" type="number" id="kNum" min="0.4" max="4" step="0.01" value="1.00" aria-label="拉伸倍数">
+      </div>
+      <div class="row">
+        <label for="y0Num">分界线 y</label>
+        <input class="num" type="number" id="y0Num" min="0" step="1" value="0">
+        <label class="check"><input type="checkbox" id="toBottom" checked>拉到画面底部</label>
+        <input class="num" type="number" id="y1Num" min="0" step="1" value="0" aria-label="拉伸带下边界 y" hidden>
+      </div>
+      <div class="row">
+        <button type="button" class="btn primary" id="openBtn">打开图片或视频</button>
+        <button type="button" class="btn" id="demoBtn">载入示例</button>
+        <input type="file" id="file" accept="image/*,video/*">
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>找参照物</h2>
+      <button type="button" class="btn primary" id="autoBtn">一键估计：分界线、人体、参照物</button>
+      <p class="fine" id="poseState">人体识别：第一次点“一键估计”时加载模型</p>
+      <button type="button" class="btn" id="scanBtn" style="text-align:center">只按当前分界线找参照物</button>
+      <div class="tools">
+        <button type="button" class="btn" id="toolRect" data-mode="rect">框一个方形<small>插座、瓷砖、正对镜头的方块</small></button>
+        <button type="button" class="btn" id="toolEllipse" data-mode="ellipse">框一个圆<small>球体最可靠</small></button>
+        <button type="button" class="btn" id="toolGap" data-mode="gap">量两段间距<small>砖缝、栏杆：上面一段，下面一段</small></button>
+        <button type="button" class="btn" id="toolBody" data-mode="body">人体比例<small>点头顶、关节、脚底</small></button>
+        <button type="button" class="btn wide" id="toolCrop" data-mode="crop">只留一块画面<small>画中画、拼接的视频：先框出被拉伸的那一块</small></button>
+        <button type="button" class="btn wide" id="uncrop" hidden>恢复整幅画面</button>
+      </div>
+      <div class="row">
+        <label for="trueRatio">参照物真实的 高÷宽</label>
+        <input class="num" type="number" id="trueRatio" min="0.1" max="10" step="0.01" value="1.00">
+        <label class="check"><input type="checkbox" id="snap" checked>吸附边缘</label>
+      </div>
+      <div class="row">
+        <label for="joint">人体比例用的关节</label>
+        <select class="num" id="joint"><option value="knee">膝盖中心</option><option value="crotch">裆部</option></select>
+      </div>
+      <label class="check" id="trackRow" hidden><input type="checkbox" id="track">分界线跟随人体（实验，针对跟踪特效）</label>
+      <ul class="list" id="candList" aria-label="候选参照物"></ul>
+    </section>
+
+    <section class="card">
+      <h2>依据 <small id="evCount"></small></h2>
+      <ul class="list" id="evList"></ul>
+      <p class="empty" id="evEmpty">还没有依据。先把分界线拖到胯部附近，再找参照物。</p>
+      <details>
+        <summary>每种依据有多可靠</summary>
+        <ul>
+          <li>重复结构（砖缝、瓷砖）：多条竖带互相印证时最可靠。</li>
+          <li>球体：从任何角度看都是圆，可靠。圆盘和方块要正对镜头才算数。</li>
+          <li>人体比例：只是人群统计，不是证据。仰拍和厚底鞋会让结果偏大，天生腿长的人会被误判。</li>
+          <li>自动识别的人体点：模型见惯了正常比例，会把被拉长的腿“认短”，所以自动结果偏保守，拖准脚底点更可信。</li>
+        </ul>
+      </details>
+    </section>
+
+    <section class="card">
+      <h2>导出</h2>
+      <div class="row">
+        <button type="button" class="btn" id="savePng">保存当前画面 PNG</button>
+        <button type="button" class="btn" id="saveVid" hidden>录制还原视频</button>
+      </div>
+      <p class="fine" id="exportMsg">导出的是按估计倍数压回去的画面，请连同依据一起说明，不要当作原片。</p>
+    </section>
+  </aside>
+</main>
+
+<script>
+/*__CORE__*/
+</script>
+<script>
+/*__APP__*/
+</script>
+</body>
+</html>
