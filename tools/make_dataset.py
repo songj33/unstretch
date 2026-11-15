@@ -80,6 +80,7 @@ def main():
     ap.add_argument("--out", default="data/gen")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--controls", type=float, default=0.25, help="share of unstretched samples")
+    ap.add_argument("--hsqueeze", type=float, default=0.0, help="share of samples that are also squeezed horizontally (whole frame, to 85-97%% width)")
     a = ap.parse_args()
     rng = np.random.default_rng(a.seed)
     files = []
@@ -113,6 +114,10 @@ def main():
         keep_size = rng.random() < 0.5           # most apps keep the frame size and lose the bottom
         if keep_size:
             out = out[:h]; y1s = min(y1s, h)
+        kx = 1.0
+        if rng.random() < a.hsqueeze:            # whole-frame "slimming": everything gets narrower
+            kx = float(rng.uniform(0.85, 0.97))
+            out = cv2.resize(out, (max(8, int(round(out.shape[1] * kx))), out.shape[0]), interpolation=cv2.INTER_AREA)
         scale = float(rng.uniform(0.55, 1.0))    # platform downscale
         if scale < 0.98:
             out = cv2.resize(out, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
@@ -121,7 +126,7 @@ def main():
         jpg = os.path.join(a.out, name + ".jpg")
         cv2.imwrite(jpg, out, [cv2.IMWRITE_JPEG_QUALITY, quality])
         cv2.imwrite(os.path.join(a.out, name + ".pgm"), cv2.imread(jpg, cv2.IMREAD_GRAYSCALE))
-        labels.append({"id": name, "w": out.shape[1], "h": out.shape[0], "k": round(k, 4), "control": bool(control),
+        labels.append({"id": name, "w": out.shape[1], "h": out.shape[0], "k": round(k, 4), "kx": round(kx, 4), "control": bool(control),
                        "y0": round(y0 * scale, 1), "y1": round(y1s * scale, 1), "interp": interp, "scale": round(scale, 3),
                        "jpeg_quality": quality, "kept_frame_size": bool(keep_size), "source": src})
     json.dump(labels, open(os.path.join(a.out, "labels.json"), "w"), indent=1, ensure_ascii=False)
