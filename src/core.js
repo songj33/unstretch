@@ -409,15 +409,21 @@
       return g[o] * (1 - fx) * (1 - fy) + g[o + 1] * fx * (1 - fy) + g[o + w] * (1 - fx) * fy + g[o + w + 1] * fx * fy;
     }
     var vals = new Float32Array(N);
+    /* Two readings of "the outline lies on an edge":
+       - signed: inside-vs-outside brightness keeps one sign all the way round a real outline, while
+         background clutter (bricks, tiles) flips sign and cancels out;
+       - trimmed: the strongest 55% of the perimeter, for a ball that is partly hidden or lit from one side. */
     function cost(cx, cy, a, bb) {
+      var sum = 0;
       for (var j = 0; j < N; j++) {
         var nx = cs[j] / a, ny = sn[j] / bb, nl = Math.sqrt(nx * nx + ny * ny); nx /= nl; ny /= nl;
         var px = cx + a * cs[j], py = cy + bb * sn[j];
-        vals[j] = Math.abs(samp(px + 1.5 * nx, py + 1.5 * ny) - samp(px - 1.5 * nx, py - 1.5 * ny));
+        var dlt = samp(px + 1.5 * nx, py + 1.5 * ny) - samp(px - 1.5 * nx, py - 1.5 * ny);
+        sum += dlt; vals[j] = Math.abs(dlt);
       }
       var s = Array.prototype.slice.call(vals).sort(function (p, q) { return q - p; }), keep = Math.round(N * 0.55), t = 0;
       for (var m = 0; m < keep; m++) t += s[m];
-      return t / keep;
+      return Math.max(Math.abs(sum) / N, 0.6 * t / keep);
     }
     var P = [b.x + b.w / 2, b.y + b.h / 2, b.w / 2, b.h / 2], bestC = cost(P[0], P[1], P[2], P[3]);
     for (var stepSize = r; stepSize >= 0.25; stepSize /= 2) {
@@ -438,13 +444,23 @@
   /* How much of a shape's height lies in the stretched band → k from its h/w.
      trueRatio = real height / real width (1 for a square or a sphere). */
   AF.kFromBox = function (box, p, trueRatio) {
-    var top = box.y, bot = box.y + box.h, tr = trueRatio || 1;
+    var top = box.y, bot = box.y + box.h, tr = trueRatio || 1, kx = p.kx || 1;
     var inBand = Math.max(0, Math.min(bot, p.y1) - Math.max(top, p.y0)), outBand = box.h - inBand;
     if (inBand < 0.15 * box.h) return { k: null, frac: inBand / box.h };
-    // box.w * tr = outBand + inBand / k
-    var need = box.w * tr - outBand;
+    // true width = box.w / kx ; true height = outBand + inBand / k = true width * tr
+    var need = (box.w / kx) * tr - outBand;
     if (need <= 0) return { k: null, frac: inBand / box.h };
     return { k: inBand / need, frac: inBand / box.h };
+  };
+  /* Whole-frame horizontal squeeze. kx = width now / true width (0.9 = squeezed to 90%).
+     Nothing inside the frame escaped it, so only an object of known shape can measure it:
+     kx = (width now * trueRatio) / true height, the height taken with the vertical stretch undone. */
+  AF.kxFromBox = function (box, p, trueRatio) {
+    var top = box.y, bot = box.y + box.h, tr = trueRatio || 1;
+    var inBand = Math.max(0, Math.min(bot, p.y1) - Math.max(top, p.y0)), outBand = box.h - inBand;
+    var trueH = outBand + inBand / (p.k || 1);
+    if (trueH <= 0) return { kx: null, frac: inBand / box.h };
+    return { kx: (box.w * tr) / trueH, frac: inBand / box.h };
   };
 
   /* ---------- cue 3: body-proportion prior ---------- */

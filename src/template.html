@@ -54,6 +54,11 @@
         <input class="num" type="number" id="kNum" min="0.4" max="4" step="0.01" value="1.00" aria-label="拉伸倍数">
       </div>
       <div class="row">
+        <label for="kxRange">横向倍数</label>
+        <input type="range" id="kxRange" min="0.7" max="1.2" step="0.005" value="1">
+        <input class="num" type="number" id="kxNum" min="0.5" max="1.6" step="0.01" value="1.00" aria-label="横向倍数：现在的宽度除以真实宽度">
+      </div>
+      <div class="row">
         <label for="y0Num">分界线 y</label>
         <input class="num" type="number" id="y0Num" min="0" step="1" value="0">
         <label class="check"><input type="checkbox" id="toBottom" checked>拉到画面底部</label>
@@ -101,8 +106,9 @@
         <ul>
           <li>重复结构（砖缝、瓷砖）：多条竖带互相印证时最可靠。</li>
           <li>球体：从任何角度看都是圆，可靠。圆盘和方块要正对镜头才算数。</li>
+          <li>横向挤压（整幅画面被压窄）：画面里没有哪一块逃过了挤压，所以只能靠本来是方或圆的东西来量。把它框出来；在分界线上方的参照物量的就是横向。</li>
           <li>人体比例：只是人群统计，不是证据。仰拍和厚底鞋会让结果偏大，天生腿长的人会被误判。</li>
-          <li>自动识别的人体点：模型见惯了正常比例，会把被拉长的腿“认短”，所以自动结果偏保守，拖准脚底点更可信。</li>
+          <li>自动识别的人体点：模型见惯了正常比例，一次只“看见”拉伸的一部分，所以要先还原再识别、反复几轮。即使这样，姿势、拍摄角度和个人身材仍然影响很大，读数只列为参考，不会自动采用。</li>
         </ul>
       </details>
     </section>

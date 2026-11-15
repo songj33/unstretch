@@ -60,6 +60,13 @@ for (const k of [1.2, 1.45, 1.8]) {
   ok("square straddling the boundary", Math.abs(AF.kFromBox({ x: 10, y: 280, w: 50, h: 20 + 30 * 1.4 }, p, 1).k - 1.4) < 1e-6);
   ok("shape above the band gives no estimate", AF.kFromBox({ x: 10, y: 100, w: 50, h: 50 }, p, 1).k === null);
 }
+// 6b. horizontal squeeze: a circle above the band measures it; a square in the band then gives the vertical factor
+{
+  const p = { y0: 300, y1: 1000, k: 1.4, kx: 0.9 };
+  ok("circle above the band measures the horizontal squeeze", Math.abs(AF.kxFromBox({ x: 50, y: 100, w: 90, h: 100 }, p, 1).kx - 0.9) < 1e-9);
+  ok("square in the band, squeeze accounted for", Math.abs(AF.kFromBox({ x: 10, y: 400, w: 45, h: 70 }, p, 1).k - 1.4) < 1e-9);
+  ok("ignoring the squeeze would overstate the stretch", AF.kFromBox({ x: 10, y: 400, w: 45, h: 70 }, { y0: 300, y1: 1000, k: 1, kx: 1 }, 1).k > 1.5);
+}
 // 7. body prior inverts a stretched median body
 {
   const r = AF.PRIORS.knee.p50, stature = 600, top = 100, sole = top + stature, knee = sole - r * stature, y0 = 380, k = 1.5;
