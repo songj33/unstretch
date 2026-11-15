@@ -706,11 +706,11 @@
   function demoScene() {
     var W = 540, H = 960, c = document.createElement("canvas"); c.width = W; c.height = H;
     var x = c.getContext("2d"), R = rng(7), i, j;
-    // brick wall: 16 px courses
+    // brick wall: 15 px courses (not 8/16/32: those read as a codec block grid and are ignored)
     x.fillStyle = "#8f9094"; x.fillRect(0, 0, W, 700);
-    for (j = 0; j < 44; j++) for (i = -1; i < 12; i++) {
-      var bx = i * 50 + (j % 2 ? 25 : 0), by = j * 16, v = 150 + Math.floor(R() * 34);
-      x.fillStyle = "rgb(" + v + "," + (v - 2) + "," + (v - 8) + ")"; x.fillRect(bx + 1, by + 2, 48, 14);
+    for (j = 0; j < 47; j++) for (i = -1; i < 12; i++) {
+      var bx = i * 50 + (j % 2 ? 25 : 0), by = j * 15, v = 150 + Math.floor(R() * 34);
+      x.fillStyle = "rgb(" + v + "," + (v - 2) + "," + (v - 8) + ")"; x.fillRect(bx + 1, by + 2, 48, Math.min(13, 700 - by - 2));
     }
     // floor
     var fg = x.createLinearGradient(0, 700, 0, H); fg.addColorStop(0, "#a99b90"); fg.addColorStop(1, "#c3b3a4");

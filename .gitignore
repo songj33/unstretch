@@ -1,5 +1,6 @@
 node_modules/
 vendor/
+data/
 .DS_Store
 *.mp4
 *.webm

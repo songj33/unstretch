@@ -51,11 +51,11 @@
   /* ---------- cue 1: repeating structure (bricks, tiles, railings) ---------- */
   /* Dominant vertical period of a column strip between rows ya..yb.
      Returns {period, snr}; snr = spectral peak / median amplitude. */
-  AF.periodScan = function (g, w, h, x0, x1, ya, yb) {
+  AF.periodScan = function (g, w, h, x0, x1, ya, yb, guide) {
     x0 = Math.max(0, x0 | 0); x1 = Math.min(w, x1 | 0);
     ya = Math.max(1, ya | 0); yb = Math.min(h - 1, yb | 0);
     var n = yb - ya, cols = x1 - x0;
-    if (n < 60 || cols < 8) return null;
+    if (cols < 8 || n < (guide ? Math.max(30, 2.2 * guide) : 60)) return null;
     var p = new Float32Array(n), mean = 0, i, x;
     for (i = 0; i < n; i++) {
       var y = ya + i, up = (y - 1) * w, dn = (y + 1) * w, s = 0;
@@ -64,7 +64,8 @@
     }
     mean /= n;
     for (i = 0; i < n; i++) p[i] = (p[i] - mean) * (0.5 - 0.5 * Math.cos((2 * Math.PI * i) / (n - 1)));
-    var pmin = 5, pmax = Math.min(48, n / 4);
+    // guide: look only near a period already known from a taller window (needs just ~2 cycles)
+    var pmin = guide ? guide / 1.35 : 5, pmax = guide ? guide * 1.35 : Math.min(120, n / 4);
     if (pmax <= pmin + 1) return null;
     var F = 320, f0 = 1 / pmax, f1 = 1 / pmin, amp = new Float32Array(F), best = 0;
     for (var k = 0; k < F; k++) {
@@ -79,8 +80,15 @@
       var a = amp[best - 1], b = amp[best], c = amp[best + 1], den = a - 2 * b + c;
       if (den !== 0) d = (0.5 * (a - c)) / den;
     }
-    var fpk = f0 + ((f1 - f0) * (best + d)) / (F - 1);
-    return { period: 1 / fpk, snr: amp[best] / med, edge: best === 0 || best === F - 1 };
+    var fpk = f0 + ((f1 - f0) * (best + d)) / (F - 1), period = 1 / fpk;
+    // If the real period is longer than the scan range, the scan locks onto half of it.
+    // A strong line at twice the period gives that away.
+    if (!guide && 2 * period <= n / 2.2) {
+      var re2 = 0, im2 = 0, w2 = Math.PI / period;
+      for (i = 0; i < n; i++) { re2 += p[i] * Math.cos(w2 * i); im2 -= p[i] * Math.sin(w2 * i); }
+      if (Math.sqrt(re2 * re2 + im2 * im2) >= 0.75 * amp[best]) period *= 2;
+    }
+    return { period: period, snr: amp[best] / med, dens: amp[best] / n, edge: best === 0 || best === F - 1 };
   };
 
   function blocky(p) { return [8, 16, 32].some(function (b) { return Math.abs(p / b - 1) < 0.025; }); }
@@ -88,19 +96,38 @@
   AF.findRepeatCandidates = function (g, w, h, y0, y1) {
     var win = Math.max(130, Math.round(h * 0.17)), m = 6;
     /* narrow strips: on a wide frame the clean patch of wall may be small */
-    var sw = Math.min(80, Math.max(40, Math.round(w / 8))), step = Math.max(20, sw >> 1), out = [];
+    var sw = Math.min(80, Math.max(40, Math.round(w / 8))), step = Math.max(20, sw >> 1), out = [], skippedDrift = 0;
     for (var x0 = 0; x0 + sw <= w; x0 += step) {
-      var ua = Math.max(0, y0 - m - win), ub = y0 - m, da = y0 + m, db = Math.min(y1, y0 + m + win);
-      var up = AF.periodScan(g, w, h, x0, x0 + sw, ua, ub);
-      var dn = AF.periodScan(g, w, h, x0, x0 + sw, da, db);
-      if (!up || !dn || up.edge || dn.edge) continue;
-      if (up.snr < 4 || dn.snr < 4) continue;
-      // 8/16/32 px in both windows is the video codec's block grid, not a texture
-      if (blocky(up.period) && blocky(dn.period)) continue;
-      var k = dn.period / up.period;
+      // Tall windows first: big bricks and tiles need several courses inside the window to be
+      // read at their true period. Fall back to short ones when the tall window is not uniform.
+      var got = null, sawDrift = false;
+      for (var t = 0; t < 3 && !got; t++) {
+        var wh = Math.round(win * [3, 1.8, 1][t]);
+        var ua = Math.max(0, y0 - m - wh), ub = y0 - m, da = y0 + m, db = Math.min(y1, y0 + m + wh);
+        if (t < 2 && (ub - ua < win * 1.3 || db - da < win * 1.3)) continue;
+        var up = AF.periodScan(g, w, h, x0, x0 + sw, ua, ub);
+        var dn = AF.periodScan(g, w, h, x0, x0 + sw, da, db);
+        if (!up || !dn || up.edge || dn.edge) continue;
+        if (up.snr < 4 || dn.snr < 4) continue;
+        // 8/16/32 px is the codec's block grid (it shows on any smooth area), not a texture
+        if (blocky(up.period) || blocky(dn.period)) continue;
+        // A filter makes the period jump at one row. Perspective (a floor, a tilted camera) makes it
+        // drift all the way down. Read each window in two halves: if the period already changes
+        // inside a window, this is drift, not a jump. A half with no clear period means the window
+        // is not one uniform texture: try a shorter one.
+        var um = (ua + ub) >> 1, dm = (da + db) >> 1;
+        var u1 = AF.periodScan(g, w, h, x0, x0 + sw, ua, um, up.period), u2 = AF.periodScan(g, w, h, x0, x0 + sw, um, ub, up.period);
+        var d1 = AF.periodScan(g, w, h, x0, x0 + sw, da, dm, dn.period), d2 = AF.periodScan(g, w, h, x0, x0 + sw, dm, db, dn.period);
+        if (!u1 || !u2 || !d1 || !d2) continue;
+        if (Math.min(u1.dens, u2.dens) < 0.4 * up.dens || Math.min(d1.dens, d2.dens) < 0.4 * dn.dens) continue;
+        if (Math.max(Math.abs(u2.period / u1.period - 1), Math.abs(d2.period / d1.period - 1)) > 0.07) { sawDrift = true; continue; }
+        got = { up: up, dn: dn, ua: ua, ub: ub, da: da, db: db };
+      }
+      if (!got) { if (sawDrift) skippedDrift++; continue; }
+      var k = got.dn.period / got.up.period;
       if (k < 0.75 || k > 2.6) continue;
-      out.push({ type: "repeat", x0: x0, x1: x0 + sw, ua: ua, ub: ub, da: da, db: db,
-                 pUp: up.period, pDown: dn.period, snr: Math.min(up.snr, dn.snr), k: k });
+      out.push({ type: "repeat", x0: x0, x1: x0 + sw, ua: got.ua, ub: got.ub, da: got.da, db: got.db,
+                 pUp: got.up.period, pDown: got.dn.period, snr: Math.min(got.up.snr, got.dn.snr), k: k });
     }
     out.forEach(function (c) {
       c.support = out.filter(function (o) { return Math.abs(o.k / c.k - 1) < 0.06; }).length;
@@ -122,7 +149,7 @@
                x0: Math.min.apply(null, grp.map(function (c) { return c.x0; })),
                x1: Math.max.apply(null, grp.map(function (c) { return c.x1; })), strips: grp };
     }).sort(function (a, b) { return b.n - a.n; });
-    return { cands: out, consensus: consensus, clusters: clusters };
+    return { cands: out, consensus: consensus, clusters: clusters, drift: skippedDrift };
   };
 
   /* ---------- locating the boundary from a repeating structure ---------- */
@@ -163,7 +190,7 @@
       for (i = 0; i + 1 < runs.length; i++) {
         var A = runs[i], B = runs[i + 1], k = B.p / A.p;
         if (B.a - A.b > maxGap || k < 1.08 || k > 2.6) continue;
-        if (blocky(A.p) && blocky(B.p)) continue;
+        if (blocky(A.p) || blocky(B.p)) continue;
         // refine inside the hand-over zone
         var top = A.a * stepY, bot = Math.min(h - 1, B.b * stepY + win);
         var pr = profileOf(g, w, h, x0, x0 + sw, top, bot), P = pr.p, n = P.length;
@@ -181,7 +208,7 @@
         if (bestT < 0) continue;
         // the texture is continuous across the boundary, so the two waves must meet in phase:
         // slide within half an ambiguity period to the row where they do
-        var amb = (A.p * B.p) / (B.p - A.p), half = Math.min(14, Math.floor(amb / 2)), bestJ = -1, bestT2 = bestT;
+        var amb = (A.p * B.p) / (B.p - A.p), half = Math.min(40, Math.floor(amb / 2)), bestJ = -1, bestT2 = bestT;
         for (var c = Math.max(1, bestT - half); c <= Math.min(n - 1, bestT + half); c++) {
           var ur = ar[c] * Math.cos(wa * c) + ai[c] * Math.sin(wa * c), ui = ai[c] * Math.cos(wa * c) - ar[c] * Math.sin(wa * c);
           var lr = br[c] * Math.cos(wb * c) + bi[c] * Math.sin(wb * c), li = bi[c] * Math.cos(wb * c) - br[c] * Math.sin(wb * c);
