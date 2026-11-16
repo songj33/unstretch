@@ -33,6 +33,37 @@ def stretch(img, y0, y1, k, interp):
     return np.vstack([top, band, rest]), y0 + new_h
 
 
+def stretch_ramp(img, y0, y1, k, ramp, interp):
+    """Like stretch(), but the factor fades in: 1 at row y0, rising linearly to k over `ramp` output rows."""
+    h, w = img.shape[:2]
+    a = (k - 1) / ramp
+    R = np.log(k) / a                                   # source rows used up by the ramp
+    if y1 - y0 <= R + 2:                                # band too short for this ramp: plain stretch
+        return stretch(img, y0, y1, k, interp) + (0,)
+    y1s = y0 + ramp + (y1 - y0 - R) * k                 # where the band ends in the output
+    out_h = int(round(y1s + (h - y1)))
+    y = np.arange(out_h, dtype=np.float64)
+    t = np.clip(y - y0, 0, None)
+    src = np.where(y <= y0, y,
+          np.where(t <= ramp, y0 + np.log1p(a * np.minimum(t, ramp)) / a,
+          np.where(y <= y1s, y0 + R + (t - ramp) / k, y1 + (y - y1s))))
+    map_y = np.repeat(src.astype(np.float32)[:, None], w, axis=1)
+    map_x = np.repeat(np.arange(w, dtype=np.float32)[None, :], out_h, axis=0)
+    return cv2.remap(img, map_x, map_y, INTERP[interp], borderMode=cv2.BORDER_REPLICATE), int(round(y1s)), ramp
+
+
+def tilt_camera(img, rng):
+    """Re-photograph the picture with the camera tilted up or down: uprights lean towards one point
+    and everything grows towards the near edge. This is what must NOT be reported as a filter."""
+    h, w = img.shape[:2]
+    D = h * rng.uniform(2.5, 7.0) * (1 if rng.random() < 0.5 else -1)      # ymid - yv
+    ym, xv, yv = h / 2, w / 2, h / 2 - D
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float64)
+    map_x = (xv + (xx - xv) * D / (yy - yv)).astype(np.float32)
+    map_y = (ym + D - D * D / (yy - yv)).astype(np.float32)
+    return cv2.remap(img, map_x, map_y, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT), 1.0 / D
+
+
 def procedural(rng, w=540, h=960):
     """A wall (bricks, tiles or plain), a floor, and maybe a socket and a ball. No people."""
     img = np.zeros((h, w, 3), np.float32)
@@ -81,6 +112,8 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--controls", type=float, default=0.25, help="share of unstretched samples")
     ap.add_argument("--hsqueeze", type=float, default=0.0, help="share of samples that are also squeezed horizontally (whole frame, to 85-97%% width)")
+    ap.add_argument("--ramp", type=float, default=0.0, help="share of stretched samples where the factor fades in over 12-35%% of the frame height instead of starting at one row")
+    ap.add_argument("--tilt", type=float, default=0.0, help="share of samples re-photographed with a tilted camera before any stretch (the look-alike that is not a filter)")
     a = ap.parse_args()
     rng = np.random.default_rng(a.seed)
     files = []
@@ -104,13 +137,22 @@ def main():
             if max(img.shape[:2]) > 1600:        # keep it phone-sized
                 f = 1600 / max(img.shape[:2]); img = cv2.resize(img, None, fx=f, fy=f, interpolation=cv2.INTER_AREA)
             src = {"kind": "image", "file": os.path.relpath(path, os.path.expanduser(a.src))}
+        tilt_c = 0.0
+        if rng.random() < a.tilt:
+            img, tilt_c = tilt_camera(img, rng)
         h = img.shape[0]
         control = rng.random() < a.controls
         k = 1.0 if control else float(rng.uniform(1.1, 1.8))
         y0 = int(h * rng.uniform(0.35, 0.65))
         y1 = h if rng.random() < 0.8 else int(h * rng.uniform(0.82, 0.95))
         interp = str(rng.choice(list(INTERP)))
-        out, y1s = (img, y1) if control else stretch(img, y0, y1, k, interp)
+        ramp = 0
+        if control:
+            out, y1s = img, y1
+        elif rng.random() < a.ramp:
+            out, y1s, ramp = stretch_ramp(img, y0, y1, k, int(h * rng.uniform(0.12, 0.35)), interp)
+        else:
+            out, y1s = stretch(img, y0, y1, k, interp)
         keep_size = rng.random() < 0.5           # most apps keep the frame size and lose the bottom
         if keep_size:
             out = out[:h]; y1s = min(y1s, h)
@@ -127,7 +169,7 @@ def main():
         cv2.imwrite(jpg, out, [cv2.IMWRITE_JPEG_QUALITY, quality])
         cv2.imwrite(os.path.join(a.out, name + ".pgm"), cv2.imread(jpg, cv2.IMREAD_GRAYSCALE))
         labels.append({"id": name, "w": out.shape[1], "h": out.shape[0], "k": round(k, 4), "kx": round(kx, 4), "control": bool(control),
-                       "y0": round(y0 * scale, 1), "y1": round(y1s * scale, 1), "interp": interp, "scale": round(scale, 3),
+                       "y0": round(y0 * scale, 1), "y1": round(y1s * scale, 1), "ramp": round(ramp * scale, 1), "tilt": round(tilt_c / scale, 7), "interp": interp, "scale": round(scale, 3),
                        "jpeg_quality": quality, "kept_frame_size": bool(keep_size), "source": src})
     json.dump(labels, open(os.path.join(a.out, "labels.json"), "w"), indent=1, ensure_ascii=False)
     n_c = sum(l["control"] for l in labels)

@@ -84,6 +84,7 @@ button, input, select { font: inherit; color: inherit; }
 
 .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .row label { color: var(--muted); font-size: 12px; }
+.row .sub { color: var(--muted); font-size: 11px; flex: 1; min-width: 140px; }
 .row input[type=range] { flex: 1; min-width: 90px; accent-color: var(--accent); }
 .num { width: 76px; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); font: 13px var(--font-num); font-variant-numeric: tabular-nums; }
 select.num { width: auto; font-family: var(--font-body); }

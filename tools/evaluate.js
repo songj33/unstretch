@@ -26,12 +26,15 @@ function readPGM(file) {
   for (let i = 0; i < g.length; i++) g[i] = b[pos + i];
   return { w, h, g };
 }
-function autoAnswer(gb, w, h) {
-  const cl = (AF.findBoundary(gb, w, h) || []).filter(c => c.strong);
-  if (!cl.length) return null;
-  const r = AF.findRepeatCandidates(gb, w, h, cl[0].y0, h);
+/* The same decision the page makes from the background: a jump at one row, or a gradual rise. */
+function autoAnswer(g, gb, w, h) {
+  const a = AF.autoBackground(g, gb, w, h, null);
+  if (!a.how || !a.adopt) return null;
+  const note = "tilt " + (a.tilt.seen ? a.tilt.c.toExponential(1) + " from " + a.tilt.from : "none") + (a.open ? ", open-ended" : "");
+  if (a.how === "ramp") return { y0: a.y0, k: a.k, ramp: a.ramp, how: "ramp", note };
+  const r = AF.findRepeatCandidates(gb, w, h, a.y0, h, 0, a.tilt.c);
   if (!r.consensus || r.consensus.n < 2 || Math.abs(r.consensus.k - 1) < 0.03) return null;
-  return { y0: cl[0].y0, k: r.consensus.k };
+  return { y0: a.y0, k: r.consensus.k, ramp: 0, how: "step", note };
 }
 function oracleAnswer(gb, w, h, y0, y1) {
   const r = AF.findRepeatCandidates(gb, w, h, Math.round(y0), Math.round(y1));
@@ -42,14 +45,18 @@ const median = a => { if (!a.length) return NaN; const s = a.slice().sort((x, y)
 for (const L of labels) {
   const im = readPGM(path.join(dir, L.id + ".pgm")), gb = AF.blur(im.g, im.w, im.h, 1);
   const src = L.source.kind === "procedural" ? "procedural/" + L.source.wall : "image/" + (L.source.file || "?").split(/[\\/]/).pop();
-  const key = (process.argv.includes("--by-file") ? src : src.split("/")[0] + (L.source.wall ? "/" + L.source.wall : "")) + (L.control ? "  control" : "  stretched");
+  const key = (process.argv.includes("--by-file") ? src : src.split("/")[0] + (L.source.wall ? "/" + L.source.wall : "")) + (L.tilt ? "  tilted" : "") + (L.control ? "  control" : L.ramp ? "  gradual" : "  stretched");
   const G = groups[key] || (groups[key] = { n: 0, auto: 0, autoOK: 0, autoBad: 0, dy: [], dk: [], orc: 0, orcOK: 0, orcBad: 0, odk: [] });
   G.n++;
-  const a = autoAnswer(gb, im.w, im.h), o = oracleAnswer(gb, im.w, im.h, L.y0, L.y1);
+  const a = autoAnswer(im.g, gb, im.w, im.h), o = L.ramp ? null : oracleAnswer(gb, im.w, im.h, L.y0, L.y1);
+  if (a && process.argv.includes("--list"))
+    console.log(L.id + "  truth: y0 " + L.y0 + " k " + L.k + (L.ramp ? " ramp " + L.ramp : "") + (L.tilt ? " tilt " + L.tilt : "") + (L.control ? " (control)" : "") +
+      "   answer: " + a.how + " y0 " + a.y0 + " k " + a.k.toFixed(3) + (a.ramp ? " ramp " + a.ramp : "") + (a.note ? "   " + a.note : ""));
   if (a) {
     G.auto++;
     const ek = Math.abs(a.k / L.k - 1), ey = Math.abs(a.y0 - L.y0);
-    if (!L.control && ek <= 0.05 && ey <= 12) G.autoOK++; else G.autoBad++;
+    // a gradual start has no sharp row: allow a third of the ramp
+    if (!L.control && ek <= 0.05 && ey <= Math.max(12, 0.34 * (L.ramp || 0))) G.autoOK++; else G.autoBad++;
     if (!L.control) { G.dy.push(ey); G.dk.push(ek * 100); }
   }
   if (o) {

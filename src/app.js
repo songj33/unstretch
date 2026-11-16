@@ -15,7 +15,7 @@
   var MARK = "#ff4a2b", MARK2 = "#ffd23f", CAND = "#4fd1ff";
   var S = {
     w: 0, h: 0, kind: "none", name: "还原尺", isDemo: false,
-    p: { y0: 0, y1: 0, k: 1, kx: 1 }, toBottom: true, adoptedX: null,
+    p: { y0: 0, y1: 0, k: 1, kx: 1, ramp: 0 }, tiltC: 0, toBottom: true, adoptedX: null,
     mode: "idle", ev: [], cands: [], adopted: null, hover: null,
     draft: null, pts: [], gapA: null, drag: null, seq: 0, gray: null, ds: 1, recording: false, stopRec: null,
     bw: 0, bh: 0, crop: null, track: false, trackOff: 0, busy: false
@@ -52,7 +52,7 @@
 
   /* ------------------------------------------------------------ evidence */
   function solveGap(A, B, p) {
-    function len(s, k) { var q = { y0: p.y0, y1: p.y1, k: k }; return AF.unmapY(s.yb, q) - AF.unmapY(s.ya, q); }
+    function len(s, k) { var q = { y0: p.y0, y1: p.y1, k: k, ramp: p.ramp }; return AF.unmapY(s.yb, q) - AF.unmapY(s.ya, q); }
     function f(k) { return len(B, k) - len(A, k); }
     var lo = 0.4, hi = 4, flo = f(lo), fhi = f(hi);
     if (flo * fhi > 0) return null;
@@ -91,12 +91,18 @@
         (e.auto ? "点是模型估的：先按估计倍数还原、再重新识别，反复" + (e.rounds ? " " + e.rounds + " 轮" : "") + "到读数稳定" + (e.direct != null ? "（不还原直接读是 ×" + fmt(e.direct) + "）" : "") + "。" +
           (e.multi ? "视频里看了 " + e.multi.frames + " 帧，其中 " + e.multi.used + " 帧读出了结果，各帧读数 " + fmt(e.multi.lo) + "–" + fmt(e.multi.hi) + "，这里显示的是居中的一帧。" : "") +
           (e.posture ? "这一帧" + e.posture + "，读数不可靠。" : "") + "三个点可以拖动修正。" : "三个点可以拖动微调。");
+    } else if (e.kind === "profile") {
+      e.title = "逐行间距（" + e.n + " 条竖带）";
+      e.detail = "等距的东西，间距从第 " + e.y0At + " 行开始变大，到第 " + (e.y0At + e.rampAt) + " 行达到 ×" + fmt(e.k);
+      e.lo = e.rlo; e.hi = e.rhi;
+      e.note = "没有一个突变的位置，是逐渐拉长的。" + e.tiltNote + (Math.abs(e.y0At - p.y0) > 4 || Math.abs(e.rampAt - p.ramp) > 4 ? "分界线或渐变段动过了，倍数是按原来的位置量的。" : "");
     } else if (e.kind === "repeat") {
       e.title = "重复结构（" + e.n + " 条竖带" + (e.n > 1 ? "一致" : "") + "）";
       e.detail = "横向 " + e.x0 + "–" + e.x1 + " px：上方周期 " + fmt(e.strips[0].pUp, 1) + " px，下方 " + fmt(e.strips[0].pDown, 1) + " px";
       if (e.n > 1) { e.lo = e.rlo; e.hi = e.rhi; }
       if (e.n === 1) e.note = "只有一条竖带，没有别的印证，谨慎采用。";
       if (Math.abs(e.k - 1) < 0.03) e.note = "上下周期相同：可能没拉伸，也可能只是视频压缩的块网格。";
+      if (e.tiltC) e.note = "已扣掉镜头倾斜造成的变化。" + e.note;
       if (Math.abs(e.y0At - p.y0) > 4) e.note = "分界线动过了，重新找一次更准。";
     }
   }
@@ -108,7 +114,9 @@
   function adopt(id) {
     var e = S.ev.filter(function (x) { return x.id === id; })[0];
     if (!e || e.k == null) return;
-    if (e.axis === "x") { S.adoptedX = id; setKx(e.k, true); } else { S.adopted = id; setK(e.k, true); }
+    if (e.axis === "x") { S.adoptedX = id; setKx(e.k, true); return; }
+    if (e.kind === "profile") { S.p.y0 = clamp(e.y0At, 1, S.p.y1 - 8); S.p.ramp = clamp(e.rampAt, 0, S.p.y1 - S.p.y0); }
+    S.adopted = id; setK(e.k, true);
   }
   function setK(k, keepAdopted) {
     S.p.k = clamp(k, 0.4, 4);
@@ -125,7 +133,7 @@
     for (var pass = 0; pass < 2; pass++) {
       S.ev.forEach(computeEv);
       var a = S.ev.filter(function (x) { return x.id === S.adopted; })[0];
-      if (a && a.k != null && a.kind !== "repeat" && a.axis !== "x") S.p.k = clamp(a.k, 0.4, 4);
+      if (a && a.k != null && a.kind !== "repeat" && a.kind !== "profile" && a.axis !== "x") S.p.k = clamp(a.k, 0.4, 4);
       var ax = S.ev.filter(function (x) { return x.id === S.adoptedX; })[0];
       if (ax && ax.k != null && ax.axis === "x") S.p.kx = clamp(ax.k, 0.5, 1.6);
     }
@@ -137,11 +145,17 @@
   /* ------------------------------------------------------------ drawing */
   /* Paint the frame with the vertical band squeezed back by p.k, into a canvas cw pixels wide. */
   function paintRestored(ctx, cw, p) {
-    var w = S.w, h = S.h, bh = (p.y1 - p.y0) / p.k;
+    var w = S.w, h = S.h, r = Math.max(0, Math.min(p.ramp || 0, p.y1 - p.y0)), ya = p.y0 + r, dy = AF.unmapY(ya, p);
     ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = "high";
     if (p.y0 > 0) ctx.drawImage(src, 0, 0, w, p.y0, 0, 0, cw, p.y0);
-    if (p.y1 > p.y0) ctx.drawImage(src, 0, p.y0, w, p.y1 - p.y0, 0, p.y0, cw, bh + (p.y1 < h ? 0.6 : 0));
-    if (p.y1 < h) ctx.drawImage(src, 0, p.y1, w, h - p.y1, 0, p.y0 + bh, cw, h - p.y1);
+    // the fade-in part: thin slices, each squeezed by its own factor
+    for (var y = p.y0; y < ya; ) {
+      var y2 = Math.min(ya, y + 4), d1 = AF.unmapY(y, p), d2 = AF.unmapY(y2, p);
+      ctx.drawImage(src, 0, y, w, y2 - y, 0, d1, cw, d2 - d1 + 0.5); y = y2;
+    }
+    var bh = (p.y1 - ya) / p.k;
+    if (p.y1 > ya) ctx.drawImage(src, 0, ya, w, p.y1 - ya, 0, dy, cw, bh + (p.y1 < h ? 0.6 : 0));
+    if (p.y1 < h) ctx.drawImage(src, 0, p.y1, w, h - p.y1, 0, dy + bh, cw, h - p.y1);
   }
   function renderOut() {
     var p = S.p, W = Math.max(1, Math.round(S.w / p.kx)), H = Math.max(1, Math.round(AF.restoredHeight(S.h, p)));
@@ -181,6 +195,11 @@
           halo(vctx, function (x) { x.arc(q[0], q[1], 5 * ds, 0, 7); }, col, lw);
         });
         label(vctx, n, e.px[0] + 8 * ds, e.H, col, fs);
+      } else if (e.kind === "profile") {
+        var pk = [];
+        e.tracks.forEach(function (t) { if (pk.length < 4 && !pk.some(function (o) { return t.x0 < o.x1 + 40 && o.x0 < t.x1 + 40; })) pk.push(t); });
+        pk.forEach(function (t) { halo(vctx, function (x) { x.rect(t.x0, e.ymin, t.x1 - t.x0, e.ymax - e.ymin); }, col, lw * 0.7, [2 * ds, 3 * ds]); });
+        if (pk.length) label(vctx, n, pk[0].x0, e.ymin, col, fs);
       } else if (e.kind === "repeat") {
         var shown = [];
         e.strips.slice().sort(function (a, b) { return b.snr - a.snr; }).forEach(function (s) {
@@ -208,7 +227,12 @@
 
     // boundary lines on top
     halo(vctx, function (x) { x.moveTo(0, p.y0); x.lineTo(w, p.y0); }, MARK, lw * 1.2);
-    label(vctx, "分界线 " + Math.round(p.y0), w - 96 * ds, p.y0 - 3 * ds, MARK, fs);
+    label(vctx, (p.ramp > 0 ? "开始拉长 " : "分界线 ") + Math.round(p.y0), w - 96 * ds, p.y0 - 3 * ds, MARK, fs);
+    if (p.ramp > 0) {
+      var yr = Math.min(p.y1, p.y0 + p.ramp);
+      halo(vctx, function (x) { x.moveTo(0, yr); x.lineTo(w, yr); }, MARK, lw * 0.8, [3 * ds, 5 * ds]);
+      label(vctx, "拉满 " + Math.round(yr), w - 96 * ds, yr - 3 * ds, MARK, fs);
+    }
     if (!S.toBottom) {
       halo(vctx, function (x) { x.moveTo(0, p.y1); x.lineTo(w, p.y1); }, MARK, lw, [8 * ds, 5 * ds]);
       label(vctx, "拉伸到 " + Math.round(p.y1), w - 96 * ds, p.y1 - 3 * ds, MARK, fs);
@@ -229,7 +253,7 @@
       if (major && y > 0 && py < cssH - 6) rctx.fillText(String(Math.round(y)), cssW - 11, py);
     }
     rctx.fillStyle = MARK;
-    [S.p.y0].concat(S.toBottom ? [] : [S.p.y1]).forEach(function (yy) {
+    [S.p.y0].concat(S.p.ramp > 0 ? [Math.min(S.p.y1, S.p.y0 + S.p.ramp)] : [], S.toBottom ? [] : [S.p.y1]).forEach(function (yy) {
       var q = yy * sc; rctx.beginPath(); rctx.moveTo(cssW, q); rctx.lineTo(cssW - 8, q - 5); rctx.lineTo(cssW - 8, q + 5); rctx.closePath(); rctx.fill();
     });
   }
@@ -253,7 +277,7 @@
     st.textContent = a ? (a.kind === "body" ? "仅凭统计" : "有依据") : "手动";
     var pct = Math.round((p.k - 1) * 100);
     var ax = S.ev.filter(function (x) { return x.id === S.adoptedX; })[0], px = Math.round((1 - p.kx) * 100);
-    words.textContent = (Math.abs(p.k - 1) < 0.03 ? "看不出纵向拉伸" : pct > 0 ? "下半截被拉长约 " + pct + "%" : "下半截被压短约 " + (-pct) + "%") +
+    words.textContent = (Math.abs(p.k - 1) < 0.03 ? "看不出纵向拉伸" : pct > 0 ? (p.ramp > 0 ? "从第 " + Math.round(p.y0) + " 行起逐渐拉长，到第 " + Math.round(p.y0 + p.ramp) + " 行拉满，约 " + pct + "%" : "下半截被拉长约 " + pct + "%") : "下半截被压短约 " + (-pct) + "%") +
       (Math.abs(p.kx - 1) < 0.015 ? "" : px > 0 ? "；整幅被横向压窄约 " + px + "%" : "；整幅被横向拉宽约 " + (-px) + "%");
     srcEl.textContent = (a ? "来源：" + a.title + (a.lo != null ? "，区间 " + fmt(a.lo) + "–" + fmt(a.hi) : "") : "来源：纵向是手动调的，没有依据") +
       (Math.abs(p.kx - 1) < 0.015 ? "" : ax ? "；横向来自 " + ax.title : "；横向是手动调的");
@@ -263,6 +287,7 @@
     $("kRange").value = p.k;
     if (document.activeElement !== $("y0Num")) $("y0Num").value = Math.round(p.y0);
     if (document.activeElement !== $("y1Num")) $("y1Num").value = Math.round(p.y1);
+    if (document.activeElement !== $("rampNum")) $("rampNum").value = Math.round(p.ramp || 0);
   }
   function render() {
     if (!S.w) return;
@@ -294,14 +319,15 @@
   }
 
   /* ------------------------------------------------------------ auto scan */
-  function scan() {
+  function scan(o) {
     if (!S.w) return;
+    var gradual = S.p.ramp > 0;                       // the repeat cue then only cross-checks the ramp
     var g = getGray(), p = S.p;
     S.ev = S.ev.filter(function (e) { return e.kind !== "repeat"; });
-    var r = AF.findRepeatCandidates(g.b, S.w, S.h, Math.round(p.y0), Math.round(p.y1)), rep = null;
+    var r = AF.findRepeatCandidates(g.b, S.w, S.h, Math.round(p.y0), Math.round(p.y1), p.ramp, S.tiltC), rep = null;
     var strong = r.clusters.filter(function (c) { return c.n >= 2; }).slice(0, 3), reps = [];
-    strong.forEach(function (c) { reps.push({ kind: "repeat", k: c.k, rlo: c.lo, rhi: c.hi, n: c.n, x0: c.x0, x1: c.x1, strips: c.strips, y0At: p.y0 }); });
-    if (!reps.length && r.cands.length) { var c0 = r.cands[0]; reps.push({ kind: "repeat", k: c0.k, n: 1, x0: c0.x0, x1: c0.x1, strips: [c0], y0At: p.y0 }); }
+    strong.forEach(function (c) { reps.push({ kind: "repeat", k: c.k, rlo: c.lo, rhi: c.hi, n: c.n, x0: c.x0, x1: c.x1, strips: c.strips, y0At: p.y0, tiltC: S.tiltC }); });
+    if (!reps.length && r.cands.length) { var c0 = r.cands[0]; reps.push({ kind: "repeat", k: c0.k, n: 1, x0: c0.x0, x1: c0.x1, strips: [c0], y0At: p.y0, tiltC: S.tiltC }); }
     rep = reps[0] || null;
     var shapes = AF.findShapeCandidates(g.g, S.w, S.h, {});
     shapes.forEach(function (c) { var q = AF.kFromBox(c, p, 1).k; c.inBand = q != null; c.plaus = q != null && q > 1.03 && q < 2.4; });
@@ -316,11 +342,13 @@
     var conflict = reps.length > 1;
     // identical periods above and below can be a real "no stretch" or just the codec's block grid: never auto-adopt
     var flat = rep && Math.abs(rep.k - 1) < 0.03;
-    reps.forEach(function (q) { addEv(q, !conflict && !flat && q.n > 1); });
+    var hold = o && o.hold;                              // a reason not to adopt on its own authority
+    reps.forEach(function (q) { addEv(q, !hold && !gradual && !conflict && !flat && q.n > 1); });
     var nIn = S.cands.filter(function (c) { return c.inBand; }).length, msg = [];
-    if (conflict) msg.push("重复结构给出了互相矛盾的倍数（" + reps.map(function (q) { return "×" + fmt(q.k); }).join("、") + "），画面多半是几块拼成的。先用“只留一块画面”框出被拉伸的那块，再找一次");
+    if (gradual) { if (rep) msg.push("渐变段上方和拉满之后各取一段对比，重复结构读出 ×" + fmt(rep.k) + "（" + rep.n + " 条竖带），供对照"); }
+    else if (conflict) msg.push("不同位置量出的倍数不一样（" + reps.map(function (q) { return "×" + fmt(q.k); }).join("、") + "），没有自动采用。常见原因有三个：拉伸是逐渐加大的（点“一键估计”会按逐行间距再量）、镜头有仰俯、或者画面是几块拼成的（用“只留一块画面”框出一块再找）");
     else if (flat) msg.push("重复结构上下周期相同（×" + fmt(rep.k) + "）：可能没拉伸，也可能只是视频压缩的块网格，没自动采用");
-    else if (rep) msg.push("重复结构：" + rep.n + " 条竖带，估计 ×" + fmt(rep.k) + (rep.n > 1 ? "，已采用" : "（只有一条，没自动采用）"));
+    else if (rep) msg.push("重复结构：" + rep.n + " 条竖带，估计 ×" + fmt(rep.k) + (rep.n > 1 ? (hold ? "，没自动采用：" + hold : "，已采用") : "（只有一条，没自动采用）"));
     if (S.cands.length) msg.push("形状候选 " + S.cands.length + " 个（" + nIn + " 个在拉伸带里量纵向，其余量横向），请确认哪个本来是正方形或正圆");
     if (!msg.length) msg.push("没找到可用的参照物。可以手动框选、量间距，或者用人体比例");
     hint(msg.join("；") + "。", conflict || (!rep && !nIn));
@@ -417,13 +445,13 @@
   async function iterBody(first) {
     var y0 = S.p.y0, y1 = S.p.y1, k = 1, best = null, direct = null;
     for (var it = 0; it < 5; it++) {
-      var q = { y0: y0, y1: y1, k: k }, ht = Math.round(AF.restoredHeight(S.h, q)), r;
+      var q = { y0: y0, y1: y1, k: k, ramp: S.p.ramp }, ht = Math.round(AF.restoredHeight(S.h, q)), r;
       if (it === 0 && first) r = first;
       else { iterC.width = S.w; iterC.height = ht; paintRestored(iterX, S.w, q); r = await detectOn(iterC, true); }
       if (!r) break;
-      var b = bodyFromPose(r, ht), y1t = y0 + (y1 - y0) / k, kk = k;
+      var b = bodyFromPose(r, ht), y1t = AF.unmapY(y1, q), qq = q;
       var res = AF.kFromBody(b.H, b.K, b.S, { y0: y0, y1: y1t, k: 1 }, AF.PRIORS.knee.p50);
-      var back = function (y) { return y <= y0 ? y : y <= y1t ? y0 + (y - y0) * kk : y1 + (y - y1t); };
+      var back = function (y) { return AF.mapY(y, qq); };
       if (it === 0) direct = res;
       best = { H: back(b.H), K: back(b.K), S: back(b.S), hip: back(b.hip), px: b.px, ok: b.ok, why: b.why, cut: b.cut, rounds: it + 1, direct: direct };
       if (res == null) break;
@@ -454,14 +482,21 @@
     await seekTo(t0); drawFrame();
     return out;
   }
-  /* Boundary suggestion: a period jump in a repeating background if there is a solid one
-     (kept only if it falls between chest and knees when a body was found); otherwise hip height. */
+  /* Boundary suggestion from the background: a jump in period at one row, or a gradual rise over a
+     stretch of rows (kept only if it falls between chest and knees when a body was found);
+     otherwise hip height. Camera tilt is separated out first. */
   function suggestBoundary(body) {
-    var g = getGray(), cl = AF.findBoundary(g.b, S.w, S.h) || [];
-    var pick = cl.filter(function (c) { return c.strong && (!body || (c.y0 >= body.sh + 0.3 * (body.hip - body.sh) && c.y0 <= body.K)); })[0];
-    if (pick) return { y0: pick.y0, how: "texture", k: pick.k, n: pick.n };
-    if (body) return { y0: body.hip, how: "pose" };
-    return null;
+    var g = getGray(), a = AF.autoBackground(g.g, g.b, S.w, S.h, body);
+    if (a.how === "ramp") return { y0: a.y0, how: "ramp", ramp: a.ramp, k: a.k, n: a.n, bg: a };
+    if (a.how === "step") return { y0: a.y0, how: "texture", k: a.k, n: a.n, bg: a };
+    if (body) return { y0: body.hip, how: "pose", bg: a };
+    return { y0: null, how: null, bg: a };
+  }
+  function tiltWords(bg) {
+    var t = bg.tilt, pct = Math.round(Math.abs(t.growth - 1) * 100), ed = bg.edges;
+    if (t.seen) return "镜头有" + (t.growth > 1 ? "仰" : "俯") + "角：等距的东西从画面顶到底会" + (t.growth > 1 ? "变大" : "变小") + "约 " + pct + "%（" + (t.from === "edges" ? "按 " + ed.lines.length + " 条竖直边的收拢算的" : "画面里竖直边不够，是按间距变化的形状估的，把握较小") + "），这部分已扣掉，不算拉伸";
+    if (bg.prof && ed.ok) return "竖直边几乎不收拢，镜头基本是平的";
+    return "";
   }
   async function autoAll() {
     if (!S.w || S.busy) return;
@@ -471,18 +506,32 @@
       hint("正在分析：识别人体、找分界线、找参照物…");
       var r = await detectPose(true).catch(function () { return null; });
       await new Promise(function (res) { setTimeout(res, 30); });
-      var body = r ? bodyFromPose(r, S.h) : null, sug = suggestBoundary(body), notes = [];
-      S.ev = S.ev.filter(function (e) { return !(e.kind === "body" && e.auto); });
-      if (sug) {
-        S.p.y0 = clamp(Math.round(sug.y0), 1, S.p.y1 - 8); recomputeAll();
-        notes.push(sug.how === "texture" ? "分界线按背景周期突变定在 " + S.p.y0 + "（" + sug.n + " 条竖带一致）" : "背景里没有可靠的周期突变，分界线先按胯部粗略放在 " + S.p.y0 + "，请拖准");
+      var body = r ? bodyFromPose(r, S.h) : null, sug = suggestBoundary(body), notes = [], bg = sug.bg;
+      S.ev = S.ev.filter(function (e) { return !(e.kind === "body" && e.auto) && e.kind !== "profile"; });
+      S.tiltC = bg.tilt.seen ? bg.tilt.c : 0; S.p.ramp = 0;
+      if (sug.how) {
+        S.p.y0 = clamp(Math.round(sug.y0), 1, S.p.y1 - 8);
+        if (sug.how === "ramp") S.p.ramp = clamp(Math.round(sug.ramp), 0, S.p.y1 - S.p.y0);
+        recomputeAll();
+        notes.push(sug.how === "ramp" ? "背景里等距的东西没有突变的位置，但间距从第 " + S.p.y0 + " 行起逐渐变大，到第 " + (S.p.y0 + S.p.ramp) + " 行达到 ×" + fmt(sug.k) + "（" + sug.n + " 条竖带），按渐变拉伸处理"
+          : sug.how === "texture" ? "分界线按背景周期突变定在 " + S.p.y0 + "（" + sug.n + " 条竖带一致）" : "背景里没有可靠的周期突变，分界线先按胯部粗略放在 " + S.p.y0 + "，请拖准");
       } else notes.push("没找到分界线的线索，请手动拖");
-      scan();
+      var tw = tiltWords(bg); if (tw) notes.push(tw);
+      var hold = bg.why === "tilt-unconfirmed" ? "镜头有仰俯，画面里又没有足够的竖直边来核对，这个倍数可能偏差一成左右" : "";
+      scan({ hold: hold });
+      if (sug.how === "ramp") {
+        var pf = bg.prof;
+        addEv({ kind: "profile", k: sug.k, rlo: bg.kLo != null && bg.kHi - bg.kLo > 0.015 ? bg.kLo : null, rhi: bg.kLo != null && bg.kHi - bg.kLo > 0.015 ? bg.kHi : null,
+                n: sug.n, y0At: S.p.y0, rampAt: S.p.ramp, tracks: pf.tracks, ymin: pf.ymin, ymax: pf.ymax,
+                tiltNote: (bg.edges.ok ? "镜头仰俯已按竖直边核对过。" : "画面里竖直边不够，镜头仰俯只能按间距变化的形状来扣，把握小一些。") +
+                          (bg.open ? "背景里等距的东西到这里就没了，没看到间距停止变大的位置，所以这个倍数只是下限，实际可能更大。" : "") }, bg.adopt);
+        if (bg.open) notes.push("注意：没看到间距停止变大的位置，×" + fmt(sug.k) + " 只是下限，没有自动采用");
+      }
       var scanMsg = $("hint").textContent;
       if (body) {
         var pick = null, multi = null;
         if (S.kind === "video" && (video.duration || 0) > 3) {
-          if (sug && sug.how === "pose") {
+          if (sug.how === "pose") {
             var pre = await iterBody(r);
             for (var vp = 0; pre && vp < 2 && Math.abs(pre.hip - S.p.y0) > 10; vp++) { S.p.y0 = clamp(Math.round(pre.hip), 1, S.p.y1 - 8); recomputeAll(); pre = await iterBody(null); }
             notes[0] = "背景里没有可靠的周期突变，分界线按还原后的胯部放在 " + S.p.y0 + "，可以再拖准";
@@ -498,7 +547,7 @@
         } else pick = await iterBody(r);
         // The hip found on the raw frame sits too low for the same reason the leg reads short.
         // Once the body is restored the hip is trustworthy: move a hip-based boundary there and read again.
-        if (pick && sug && sug.how === "pose" && !multi) {
+        if (pick && sug.how === "pose" && !multi) {
           for (var pass = 0; pass < 2 && Math.abs(pick.hip - S.p.y0) > 10; pass++) {
             S.p.y0 = clamp(Math.round(pick.hip), 1, S.p.y1 - 8); recomputeAll();
             var again = await iterBody(null);
@@ -509,15 +558,22 @@
           scan(); scanMsg = $("hint").textContent;
         }
         if (pick) {
-          var eb = addEv({ kind: "body", auto: true, H: pick.H, J: pick.K, S: pick.S, px: pick.px, which: "knee",
-                           rounds: pick.rounds, direct: pick.direct, posture: pick.ok ? "" : pick.why, multi: multi }, false);
-          // Not adopted automatically: one person's proportions and the camera angle still decide a lot.
-          if (eb.k != null) notes.push("人体比例读数 ×" + fmt(eb.k) + "（" + fmt(eb.lo) + "–" + fmt(eb.hi) + "）" +
-            (multi ? "，取自 " + multi.used + " 帧的中位" : "") + (pick.ok || multi ? "" : "；这一帧" + pick.why + "，读数不可靠") + "；只供参考，没有自动采用");
+          var est = AF.bodyEstimate(pick.H, pick.K, pick.S, S.p, "knee").k50;
+          // A leg stretched to less than 0.75 or more than 2.2 times is not a filter anyone uses:
+          // the model put a point on the wrong thing (back view, raised arms, a prop). Do not list it.
+          if (est != null && (est < 0.75 || est > 2.2)) {
+            notes.push("人体比例读出 ×" + fmt(est) + "，这个数不合理，多半是模型把点标错了（背影、举着手、被挡住时常见），已丢弃。需要的话用“人体比例”手动点三个点");
+          } else {
+            var eb = addEv({ kind: "body", auto: true, H: pick.H, J: pick.K, S: pick.S, px: pick.px, which: "knee",
+                             rounds: pick.rounds, direct: pick.direct, posture: pick.ok ? "" : pick.why, multi: multi }, false);
+            // Not adopted automatically: one person's proportions and the camera angle still decide a lot.
+            if (eb.k != null) notes.push("人体比例读数 ×" + fmt(eb.k) + "（" + fmt(eb.lo) + "–" + fmt(eb.hi) + "）" +
+              (multi ? "，取自 " + multi.used + " 帧的中位" : "") + (pick.ok || multi ? "" : "；这一帧" + pick.why + "，读数不可靠") + "；只供参考，没有自动采用");
+          }
         } else notes.push("没识别到人体");
       } else if (Pz.state === "failed") notes.push("人体模型加载不了，人体比例请手动点三个点");
       else notes.push("没识别到人体");
-      hint(notes.join("；") + "。" + scanMsg, !sug);
+      hint(notes.join("；") + "。" + scanMsg, !sug.how);
     } catch (e) { hint("自动分析出错：" + (e && e.message || e), true); }
     S.busy = false; $("autoBtn").disabled = false;
   }
@@ -571,6 +627,7 @@
     return hit;
   }
   function setY0(y) { S.p.y0 = clamp(Math.round(y), 1, S.p.y1 - 8); recomputeAll(); renderLists(); render(); }
+  function setRamp(v) { S.p.ramp = clamp(Math.round(v), 0, Math.max(0, S.p.y1 - S.p.y0)); recomputeAll(); renderLists(); render(); }
   function setY1(y) { S.p.y1 = clamp(Math.round(y), S.p.y0 + 8, S.h); recomputeAll(); renderLists(); render(); }
 
   view.addEventListener("pointerdown", function (e) {
@@ -660,6 +717,7 @@
   $("kxNum").addEventListener("change", function () { var v = parseFloat(this.value); if (isFinite(v)) setKx(v); });
   $("y0Num").addEventListener("change", function () { var v = parseFloat(this.value); if (isFinite(v)) setY0(v); });
   $("y1Num").addEventListener("change", function () { var v = parseFloat(this.value); if (isFinite(v)) setY1(v); });
+  $("rampNum").addEventListener("change", function () { var v = parseFloat(this.value); if (isFinite(v)) setRamp(v); });
   $("toBottom").addEventListener("change", function () {
     S.toBottom = this.checked; $("y1Num").hidden = S.toBottom;
     S.p.y1 = S.toBottom ? S.h : Math.round(Math.min(S.h, S.p.y0 + (S.h - S.p.y0) * 0.85));
@@ -692,7 +750,7 @@
   /* ------------------------------------------------------------ loading */
   function resetWork(w, h) {
     S.w = w; S.h = h; src.width = w; src.height = h;
-    S.p = { y0: Math.round(h * 0.5), y1: h, k: 1, kx: 1 }; S.adoptedX = null; S.toBottom = true; $("toBottom").checked = true; $("y1Num").hidden = true;
+    S.p = { y0: Math.round(h * 0.5), y1: h, k: 1, kx: 1, ramp: 0 }; S.tiltC = 0; S.adoptedX = null; S.toBottom = true; $("toBottom").checked = true; $("y1Num").hidden = true;
     S.ev = []; S.cands = []; S.adopted = null; S.gray = null; S.mode = "idle"; S.pts = []; S.gapA = null; S.draft = null;
     $("y0Num").max = h; $("y1Num").max = h;
     $("uncrop").hidden = !S.crop; S.track = false; $("track").checked = false;
