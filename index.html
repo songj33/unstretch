@@ -94,6 +94,7 @@ button, input, select { font: inherit; color: inherit; }
 
 .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .row label { color: var(--muted); font-size: 12px; }
+.row .sub { color: var(--muted); font-size: 11px; flex: 1; min-width: 140px; }
 .row input[type=range] { flex: 1; min-width: 90px; accent-color: var(--accent); }
 .num { width: 76px; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); font: 13px var(--font-num); font-variant-numeric: tabular-nums; }
 select.num { width: auto; font-family: var(--font-body); }
@@ -184,6 +185,11 @@ input[type=file] { display: none; }
         <input class="num" type="number" id="y1Num" min="0" step="1" value="0" aria-label="拉伸带下边界 y" hidden>
       </div>
       <div class="row">
+        <label for="rampNum">渐变段 px</label>
+        <input class="num" type="number" id="rampNum" min="0" step="1" value="0" aria-describedby="rampHelp">
+        <small class="sub" id="rampHelp">0 是一刀切；大于 0 表示从分界线起，经过这么多行才拉满</small>
+      </div>
+      <div class="row">
         <button type="button" class="btn primary" id="openBtn">打开图片或视频</button>
         <button type="button" class="btn" id="demoBtn">载入示例</button>
         <input type="file" id="file" accept="image/*,video/*">
@@ -224,6 +230,8 @@ input[type=file] { display: none; }
         <summary>每种依据有多可靠</summary>
         <ul>
           <li>重复结构（砖缝、瓷砖）：多条竖带互相印证时最可靠。</li>
+          <li>逐行间距：有些滤镜不是一刀切，而是从某一行起逐渐拉长。这时没有突变的位置，工具改为沿着砖缝、百叶这类等距的东西一路量下去，看间距是怎么变的。至少要三条竖带一致才算数。</li>
+          <li>镜头仰俯：仰拍或俯拍也会让间距从上到下变化，但那是全程平滑变化，而且竖直的边（门框、墙角）会跟着向一头收拢。工具先把这部分扣掉，剩下的才算拉伸。画面里没有足够的竖直边时，这一步只能靠间距变化的形状来猜，把握小一些。</li>
           <li>球体：从任何角度看都是圆，可靠。圆盘和方块要正对镜头才算数。</li>
           <li>横向挤压（整幅画面被压窄）：画面里没有哪一块逃过了挤压，所以只能靠本来是方或圆的东西来量。把它框出来；在分界线上方的参照物量的就是横向。</li>
           <li>人体比例：只是人群统计，不是证据。仰拍和厚底鞋会让结果偏大，天生腿长的人会被误判。</li>
@@ -286,18 +294,45 @@ input[type=file] { display: none; }
   };
 
   /* ---------- the mapping ---------- */
-  /* stretched y -> original y */
+  /* The filter is a remap of rows. Rows above y0 are untouched. From y0 the local stretch factor
+     rises linearly from 1 to k over `ramp` rows (ramp = 0: it jumps straight to k), stays at k
+     down to y1, and is 1 again below y1.  p = {y0, y1, k, ramp}. */
+  function rampOf(p) { return Math.max(0, Math.min(p.ramp || 0, p.y1 - p.y0)); }
+  /* local stretch factor at stretched row y */
+  AF.scaleAt = function (y, p) {
+    if (y < p.y0 || y >= p.y1) return 1;
+    var r = rampOf(p);
+    return r > 0 && y < p.y0 + r ? 1 + (p.k - 1) * (y - p.y0) / r : p.k;
+  };
+  /* stretched y -> original y  (the integral of 1 / scale) */
   AF.unmapY = function (y, p) {
     if (y <= p.y0) return y;
-    if (y <= p.y1) return p.y0 + (y - p.y0) / p.k;
-    return p.y0 + (p.y1 - p.y0) / p.k + (y - p.y1);
+    var r = rampOf(p), k = p.k, t = Math.min(y, p.y1) - p.y0, out = p.y0;
+    if (r > 0) {
+      var tr = Math.min(t, r), a = (k - 1) / r;
+      out += Math.abs(k - 1) < 1e-9 ? tr : Math.log(1 + a * tr) / a; t -= tr;
+    }
+    out += t / k;
+    return y > p.y1 ? out + (y - p.y1) : out;
+  };
+  /* original y -> stretched y  (inverse of unmapY) */
+  AF.mapY = function (yt, p) {
+    if (yt <= p.y0) return yt;
+    var r = rampOf(p), k = p.k, t = yt - p.y0, y = p.y0;
+    if (r > 0) {
+      var a = (k - 1) / r, R = Math.abs(k - 1) < 1e-9 ? r : Math.log(k) / a;      // true height of the ramp
+      if (t <= R) return Math.min(p.y1, y + (Math.abs(k - 1) < 1e-9 ? t : (Math.exp(a * t) - 1) / a));
+      y += r; t -= R;
+    }
+    var rest = (p.y1 - y) / k;                                                      // true height of the plateau
+    return t <= rest ? y + t * k : p.y1 + (t - rest);
   };
   AF.restoredHeight = function (h, p) { return AF.unmapY(h, p); };
 
   /* ---------- cue 1: repeating structure (bricks, tiles, railings) ---------- */
   /* Dominant vertical period of a column strip between rows ya..yb.
      Returns {period, snr}; snr = spectral peak / median amplitude. */
-  AF.periodScan = function (g, w, h, x0, x1, ya, yb, guide) {
+  AF.periodScan = function (g, w, h, x0, x1, ya, yb, guide, nf) {
     x0 = Math.max(0, x0 | 0); x1 = Math.min(w, x1 | 0);
     ya = Math.max(1, ya | 0); yb = Math.min(h - 1, yb | 0);
     var n = yb - ya, cols = x1 - x0;
@@ -313,7 +348,7 @@ input[type=file] { display: none; }
     // guide: look only near a period already known from a taller window (needs just ~2 cycles)
     var pmin = guide ? guide / 1.35 : 5, pmax = guide ? guide * 1.35 : Math.min(120, n / 4);
     if (pmax <= pmin + 1) return null;
-    var F = 320, f0 = 1 / pmax, f1 = 1 / pmin, amp = new Float32Array(F), best = 0;
+    var F = nf || 320, f0 = 1 / pmax, f1 = 1 / pmin, amp = new Float32Array(F), best = 0;
     for (var k = 0; k < F; k++) {
       var f = f0 + ((f1 - f0) * k) / (F - 1), re = 0, im = 0, wv = 2 * Math.PI * f;
       for (i = 0; i < n; i++) { re += p[i] * Math.cos(wv * i); im -= p[i] * Math.sin(wv * i); }
@@ -339,7 +374,10 @@ input[type=file] { display: none; }
 
   function blocky(p) { return [8, 16, 32].some(function (b) { return Math.abs(p / b - 1) < 0.025; }); }
   /* Compare the period just above the boundary with the period just below it, strip by strip. */
-  AF.findRepeatCandidates = function (g, w, h, y0, y1) {
+  AF.findRepeatCandidates = function (g, w, h, y0, y1, ramp, tiltC) {
+    // growth the camera tilt alone produces between two rows (1 when there is no tilt)
+    function tg(a, b) { return tiltC ? AF.tiltGrowth(tiltC, a, b, h) : 1; }
+    var yd = Math.min(y1, y0 + Math.max(0, Math.round(ramp || 0)));    // where the full factor is reached
     var win = Math.max(130, Math.round(h * 0.17)), m = 6;
     /* narrow strips: on a wide frame the clean patch of wall may be small */
     var sw = Math.min(80, Math.max(40, Math.round(w / 8))), step = Math.max(20, sw >> 1), out = [], skippedDrift = 0;
@@ -349,7 +387,7 @@ input[type=file] { display: none; }
       var got = null, sawDrift = false;
       for (var t = 0; t < 3 && !got; t++) {
         var wh = Math.round(win * [3, 1.8, 1][t]);
-        var ua = Math.max(0, y0 - m - wh), ub = y0 - m, da = y0 + m, db = Math.min(y1, y0 + m + wh);
+        var ua = Math.max(0, y0 - m - wh), ub = y0 - m, da = yd + m, db = Math.min(y1, yd + m + wh);
         if (t < 2 && (ub - ua < win * 1.3 || db - da < win * 1.3)) continue;
         var up = AF.periodScan(g, w, h, x0, x0 + sw, ua, ub);
         var dn = AF.periodScan(g, w, h, x0, x0 + sw, da, db);
@@ -366,11 +404,12 @@ input[type=file] { display: none; }
         var d1 = AF.periodScan(g, w, h, x0, x0 + sw, da, dm, dn.period), d2 = AF.periodScan(g, w, h, x0, x0 + sw, dm, db, dn.period);
         if (!u1 || !u2 || !d1 || !d2) continue;
         if (Math.min(u1.dens, u2.dens) < 0.4 * up.dens || Math.min(d1.dens, d2.dens) < 0.4 * dn.dens) continue;
-        if (Math.max(Math.abs(u2.period / u1.period - 1), Math.abs(d2.period / d1.period - 1)) > 0.07) { sawDrift = true; continue; }
+        var uq = (ub - ua) / 4, dq = (db - da) / 4;
+        if (Math.max(Math.abs(u2.period / u1.period / tg(ua + uq, ub - uq) - 1), Math.abs(d2.period / d1.period / tg(da + dq, db - dq) - 1)) > 0.07) { sawDrift = true; continue; }
         got = { up: up, dn: dn, ua: ua, ub: ub, da: da, db: db };
       }
       if (!got) { if (sawDrift) skippedDrift++; continue; }
-      var k = got.dn.period / got.up.period;
+      var k = got.dn.period / got.up.period / tg((got.ua + got.ub) / 2, (got.da + got.db) / 2);
       if (k < 0.75 || k > 2.6) continue;
       out.push({ type: "repeat", x0: x0, x1: x0 + sw, ua: got.ua, ub: got.ub, da: got.da, db: got.db,
                  pUp: got.up.period, pDown: got.dn.period, snr: Math.min(got.up.snr, got.dn.snr), k: k });
@@ -480,6 +519,351 @@ input[type=file] { display: none; }
     clusters.forEach(function (c) { c.strong = c.n >= 2 && c.run >= 11; });
     clusters.sort(function (a, b) { return (b.strong - a.strong) || (b.n - a.n) || (b.run - a.run); });
     return clusters;
+  };
+
+  /* ---------- the stretch factor row by row ---------- */
+  /* How much a period grows from row ya to row yb under the tilt law with slope c (h = frame height). */
+  AF.tiltGrowth = function (c, ya, yb, h) { var q = (1 + c * (yb - h / 2)) / (1 + c * (ya - h / 2)); return q * q; };
+
+  /* Follow the local period of a repeating texture down one strip: short windows (about 4.5
+     periods), each guided by the period of the window before, so a slow change can be followed.
+     Returns {x0, x1, pts: [{y, p, wh}]} or null when the strip has no clear texture. */
+  AF.periodTrack = function (g, w, h, x0, x1) {
+    var win = Math.max(110, Math.round(h * 0.14)), seed = null, ya, r;
+    for (ya = 0; ya + win <= h; ya += win >> 1) {
+      r = AF.periodScan(g, w, h, x0, x1, ya, ya + win);
+      if (r && !r.edge && r.snr >= 4 && !blocky(r.period) && (!seed || r.snr > seed.r.snr)) seed = { yc: ya + win / 2, r: r };
+    }
+    if (!seed) return null;
+    var pts = [];
+    function walk(dir) {
+      var p = seed.r.period, yc = seed.yc, first = dir > 0;
+      for (;;) {
+        if (!first) yc += dir * Math.max(8, Math.round(p));
+        first = false;
+        var wh = Math.round(Math.max(44, Math.min(win, 4.5 * p))), a = Math.round(yc - wh / 2);
+        if (a < 1 || a + wh > h - 1) break;
+        var q = AF.periodScan(g, w, h, x0, x1, a, a + wh, p, 96);
+        if (q && !q.edge && q.dens >= 0.3 * seed.r.dens && Math.abs(q.period / p - 1) <= 0.12) {
+          pts.push({ y: yc, p: q.period, wh: wh }); p = q.period;
+        }
+        // otherwise a gap: something in front of the wall, or a hard jump (findBoundary's job)
+      }
+    }
+    walk(1); walk(-1);
+    pts.sort(function (a, b) { return a.y - b.y; });
+    return { x0: x0, x1: x1, pts: pts, seed: seed.r.period };
+  };
+
+  /* What shape does the change of period down the frame have? Each strip keeps its own base period;
+     the shape is shared by all strips and is the product of two things:
+       camera tilt   sqrt(period) linear in y over the whole frame (slope c; c = 0 means no tilt).
+                     This is what a tilted camera does to a flat wall. It is not a filter.
+       a filter      nothing, or a step at one row, or a ramp (flat, rising steadily, flat again)
+     The tilt is fitted first and together with the filter term, so that only what the camera angle
+     cannot explain is reported as a stretch. cRange = [lo, mid, hi] fixes c at mid when upright edges in
+     the frame give the tilt, and reads the factor again at lo and hi for its range. Residuals are in log-period, capped at 10% so that a few
+     bad windows cannot decide the outcome. */
+  AF.fitScale = function (tracks, h, cRange) {
+    var use = (tracks || []).filter(function (t) { return t && t.pts.length >= 6 && t.pts[t.pts.length - 1].y - t.pts[0].y >= 0.3 * h; });
+    var first = fitTracks(use, h, cRange);
+    if (!first) return null;
+    // one strip alone proves nothing, and a gradual change needs three that agree
+    if (use.length < 2) { first.model = "none"; first.weak = true; return first; }
+    // Strips over foliage, people or mixed textures give tracks that follow nothing. Keep the strips
+    // that the most flexible shape (tilt + ramp) describes well, and fit again on those alone.
+    var q = first.perStrip.map(function (s) { return s.rms; }).sort(function (a, b) { return a - b; });
+    var lim = Math.max(0.025, 1.6 * q[Math.floor((q.length - 1) / 3)]);
+    var kept = use.filter(function (t, i) { return first.perStrip[i].rms <= lim && first.perStrip[i].inl >= 0.7; });
+    if (kept.length < 2) { first.model = "none"; first.weak = true; return first; }
+    var out = kept.length === use.length ? first : fitTracks(kept, h, cRange);
+    out.dropped = use.length - kept.length; out.used = kept;
+    if (out.model === "ramp" && kept.length < 4) { out.model = "none"; out.weak = true; }
+    // A filter remaps whole rows, so the left and the right part of the picture must show the same
+    // rise. Read the amplitude of the fitted ramp on each half separately; junk does not repeat.
+    if (out.model === "ramp") {
+      var byX = kept.slice().sort(function (a, b) { return a.x0 - b.x0; }), mid = byX.length >> 1;
+      var hk = [byX.slice(0, mid), byX.slice(mid)].map(function (half) { return rampAmplitude(half, h, out.shape); });
+      out.halves = hk;
+      var dk = out.k - 1;
+      if (hk.some(function (k) { return k == null || k - 1 < 0.5 * dk || k - 1 > 1.7 * dk; })) { out.model = "none"; out.weak = true; }
+    }
+    return out;
+  };
+  /* Factor reached by a ramp of fixed position and tilt, read on a subset of strips. */
+  function rampAmplitude(use, h, sh) {
+    var Y = [], L = [], SI = [], G = [], ns = use.length, i, s;
+    use.forEach(function (t, si) { t.pts.forEach(function (q) {
+      Y.push(q.y); L.push(Math.log(q.p) - 2 * Math.log(1 + sh.c * (q.y - h / 2))); SI.push(si);
+      G.push(Math.max(0, Math.min(1, (q.y - sh.y0) / (sh.y1 - sh.y0))));
+    }); });
+    var n = Y.length, wgt = new Float64Array(n).fill(1), A = 0;
+    if (n < 8) return null;
+    for (var pass = 0; pass < 3; pass++) {
+      var sw = new Float64Array(ns), sg = new Float64Array(ns), sl = new Float64Array(ns), num = 0, den = 0;
+      for (i = 0; i < n; i++) { s = SI[i]; sw[s] += wgt[i]; sg[s] += wgt[i] * G[i]; sl[s] += wgt[i] * L[i]; }
+      for (i = 0; i < n; i++) { s = SI[i]; if (!sw[s]) continue; var gs = G[i] - sg[s] / sw[s], ls = L[i] - sl[s] / sw[s]; num += wgt[i] * gs * ls; den += wgt[i] * gs * gs; }
+      if (den < 1e-9) return null;
+      A = num / den;
+      for (i = 0; i < n; i++) { s = SI[i]; wgt[i] = sw[s] && Math.abs(L[i] - (sl[s] - A * sg[s]) / sw[s] - A * G[i]) < 0.1 ? 1 : 0; }
+    }
+    return Math.exp(A);
+  }
+  function fitTracks(use, h, cRange) {
+    var Y = [], L0 = [], SI = [], WH = [], ns = use.length;
+    use.forEach(function (t, si) { t.pts.forEach(function (q) { Y.push(q.y); L0.push(Math.log(q.p)); SI.push(si); WH.push(q.wh); }); });
+    var n = Y.length, i;
+    if (!ns || n < 12) return null;
+    var CAP = 0.1, G = new Float64Array(n), L = new Float64Array(n), wgt = new Float64Array(n), off = new Float64Array(ns);
+    var sw = new Float64Array(ns), sg = new Float64Array(ns), sl = new Float64Array(ns);
+    function fit(fixedA) {
+      var A = 0, s, r;
+      for (i = 0; i < n; i++) wgt[i] = 1;
+      for (var pass = 0; pass < 3; pass++) {
+        sw.fill(0); sg.fill(0); sl.fill(0);
+        for (i = 0; i < n; i++) { s = SI[i]; sw[s] += wgt[i]; sg[s] += wgt[i] * G[i]; sl[s] += wgt[i] * L[i]; }
+        var num = 0, den = 0;
+        for (i = 0; i < n; i++) {
+          s = SI[i]; if (!sw[s]) continue;
+          var gs = G[i] - sg[s] / sw[s], ls = L[i] - sl[s] / sw[s];
+          num += wgt[i] * gs * ls; den += wgt[i] * gs * gs;
+        }
+        A = fixedA != null ? fixedA : den > 1e-12 ? num / den : 0;
+        for (s = 0; s < ns; s++) off[s] = sw[s] ? (sl[s] - A * sg[s]) / sw[s] : 0;
+        for (i = 0; i < n; i++) { r = L[i] - off[SI[i]] - A * G[i]; wgt[i] = Math.abs(r) < CAP ? 1 : 0; }
+      }
+      var sse = 0;
+      for (i = 0; i < n; i++) { r = L[i] - off[SI[i]] - A * G[i]; sse += Math.min(r * r, CAP * CAP); }
+      return { A: A, sse: sse };
+    }
+    var ymin = Math.min.apply(null, Y), ymax = Math.max.apply(null, Y), span = ymax - ymin, ym = h / 2, f, y0, ys, ye;
+    var gs1 = Math.max(4, span / 48), gs2 = Math.max(6, span / 28);
+    function setTilt(c) { for (i = 0; i < n; i++) L[i] = L0[i] - 2 * Math.log(1 + c * (Y[i] - ym)); }
+    function bestStep(c) {
+      var b = null;
+      for (y0 = ymin + 2 * gs1; y0 <= ymax - 2 * gs1; y0 += gs1) {
+        for (i = 0; i < n; i++) G[i] = Y[i] >= y0 ? 1 : 0;
+        f = fit(null);
+        if (!b || f.sse < b.sse) b = { sse: f.sse, y0: y0, k: Math.exp(f.A), c: c };
+      }
+      return b;
+    }
+    function bestRamp(c) {
+      var b = null;
+      for (ys = ymin; ys <= ymax - 2 * gs2; ys += gs2)
+        for (ye = ys + gs2; ye <= ymax + 1e-6; ye += gs2) {
+          for (i = 0; i < n; i++) G[i] = Math.max(0, Math.min(1, (Y[i] - ys) / (ye - ys)));
+          f = fit(null);
+          if (!b || f.sse < b.sse) b = { sse: f.sse, y0: ys, y1: ye, k: Math.exp(f.A), c: c };
+        }
+      return b;
+    }
+    // without tilt
+    setTilt(0); G.fill(0);
+    var none = fit(0), step0 = bestStep(0), ramp0 = bestRamp(0);
+    // with tilt: c on a grid, limited by the upright edges when they are known
+    var cMax = 0.45 / h, tilt = { sse: none.sse, c: 0 }, tstep = step0, tramp = ramp0, kRange = null;
+    function lim(c) { return Math.max(-cMax, Math.min(cMax, c)); }
+    if (cRange) {
+      // The edges give the tilt: use their value, and their error bar for the range of the factor.
+      var cm = lim(cRange[1]);
+      setTilt(cm); G.fill(0); f = fit(0); tilt = { sse: f.sse, c: cm };
+      tstep = bestStep(cm); tramp = bestRamp(cm);
+      var ends = [lim(cRange[0]), lim(cRange[2])].map(function (c) { setTilt(c); return [bestStep(c), bestRamp(c)]; });
+      kRange = { step: [ends[0][0], ends[1][0]], ramp: [ends[0][1], ends[1][1]] };
+    } else {
+      for (var ci = 0; ci <= 40; ci++) {
+        var c = -cMax + 2 * cMax * ci / 40;
+        if (Math.abs(c) < 1e-12) continue;
+        setTilt(c); G.fill(0);
+        f = fit(0); if (f.sse < tilt.sse) tilt = { sse: f.sse, c: c };
+      }
+      // A filter term may only take over part of what the tilt-only fit calls tilt: c between 0 and
+      // that value. Left free, an opposite tilt plus a huge ramp would "explain" any tilted wall.
+      for (var cj = 1; cj <= 5 && tilt.c; cj++) {
+        var c2 = tilt.c * cj / 5;
+        setTilt(c2);
+        var bs = bestStep(c2); if (bs && tstep && bs.sse < tstep.sse) tstep = bs;
+        var br = bestRamp(c2); if (br && tramp && br.sse < tramp.sse) tramp = br;
+      }
+    }
+    tilt.growth = AF.tiltGrowth(tilt.c, ymin, ymax, h);
+    var whs = WH.slice().sort(function (a, b) { return a - b; }), wh = whs[Math.floor(whs.length / 4)];
+    function rms(m) { return m ? Math.sqrt(m.sse / n) : null; }
+    var out = { n: n, strips: ns, ymin: ymin, ymax: ymax, wh: wh, none: none, tilt: tilt, step: tstep, ramp: tramp,
+                rms: { none: rms(none), tilt: rms(tilt), step: rms(tstep), ramp: rms(tramp), step0: rms(step0), ramp0: rms(ramp0) },
+                model: "none", c: 0, tilted: false, bounded: !!cRange };
+    // how well tilt + ramp describes each strip (used to drop strips that follow nothing)
+    out.perStrip = [];
+    if (tramp) {
+      setTilt(tramp.c);
+      for (i = 0; i < n; i++) G[i] = Math.max(0, Math.min(1, (Y[i] - tramp.y0) / (tramp.y1 - tramp.y0)));
+      f = fit(null);
+      var ss = new Float64Array(ns), cnt = new Float64Array(ns), inl = new Float64Array(ns);
+      for (i = 0; i < n; i++) { var r = L[i] - off[SI[i]] - f.A * G[i]; ss[SI[i]] += Math.min(r * r, CAP * CAP); cnt[SI[i]]++; if (Math.abs(r) < CAP) inl[SI[i]]++; }
+      for (i = 0; i < ns; i++) out.perStrip.push({ rms: Math.sqrt(ss[i] / cnt[i]), inl: inl[i] / cnt[i] });
+    }
+    // is there a tilt worth speaking of?
+    out.tilted = (none.sse - tilt.sse) / Math.max(1e-12, none.sse) >= 0.3 && Math.abs(tilt.growth - 1) >= 0.04;
+    if (!tstep || !tramp) return out;
+    var rl = tramp.y1 - tramp.y0;
+    var isRamp = ((rl >= 2.5 * wh && tramp.sse <= 0.9 * tstep.sse) || (rl >= 1.2 * wh && tramp.sse <= 0.5 * tstep.sse)) &&
+                 tramp.y0 - ymin >= 1.5 * wh,                 // rows above the ramp where nothing changes: without them it is just tilt
+        best = isRamp ? tramp : tstep;
+    // The filter term must explain a real share of what the tilt alone leaves unexplained, and
+    // lengthen by more than a few percent. Without edges to pin the tilt down, ask for more.
+    var gain = (tilt.sse - best.sse) / Math.max(1e-12, tilt.sse);
+    if (gain >= (cRange ? 0.3 : 0.4) && best.k >= 1.04 && best.k <= 2.2) out.model = isRamp ? "ramp" : "step";
+    // the texture ends before the factor levels off: what was read is a lower bound
+    var after = 0; for (i = 0; i < n; i++) if (Y[i] > tramp.y1 + wh / 2) after++;
+    out.open = isRamp && (tramp.y1 >= ymax - gs2 || after < Math.max(6, 0.08 * n));
+    out.shape = isRamp ? { c: best.c, y0: tramp.y0, y1: tramp.y1 } : null;
+    out.k = best.k; out.y0 = best.y0; out.rampLen = isRamp ? tramp.y1 - tramp.y0 : 0; out.c = best.c; out.gain = gain;
+    if (kRange) {
+      var ks = kRange[isRamp ? "ramp" : "step"].filter(Boolean).map(function (m) { return m.k; }).concat([best.k]);
+      out.kLo = Math.min.apply(null, ks); out.kHi = Math.max.apply(null, ks);
+    }
+    return out;
+  }
+  /* Tracks for every strip of the frame, then the fit. Works on a reduced copy of tall frames. */
+  AF.scaleProfile = function (g, w, h, cRange) {
+    var d = AF.downscale(g, w, h, 1300), W = d.w, H = d.h, sc = d.s;
+    var gb = sc === 1 ? g : AF.blur(d.g, W, H, 1);
+    var sw = Math.min(80, Math.max(40, Math.round(W / 8))), tracks = [];
+    for (var x0 = 0; x0 + sw <= W; x0 += sw >> 1) {
+      var t = AF.periodTrack(gb, W, H, x0, x0 + sw);
+      if (t) tracks.push(t);
+    }
+    var fit = AF.fitScale(tracks, H, cRange ? cRange.map(function (c) { return c * sc; }) : null);
+    if (!fit) return null;
+    // back to full-resolution rows
+    fit.scale = sc; fit.ymin *= sc; fit.ymax *= sc; fit.wh *= sc; fit.c /= sc;
+    if (fit.y0 != null) { fit.y0 = Math.round(fit.y0 * sc); fit.rampLen = Math.round(fit.rampLen * sc); }
+    if (fit.tilt) fit.tilt.c /= sc;
+    fit.tracks = (fit.used || tracks).map(function (t) { return { x0: t.x0 * sc, x1: t.x1 * sc, n: t.pts.length, seed: t.seed * sc }; });
+    delete fit.used;
+    return fit;
+  };
+
+  /* ---------- camera tilt from upright edges ---------- */
+  /* Long, straight, nearly vertical edges (door frames, wall corners). With the camera tilted up or
+     down they lean towards one point: lean = (x - xv) / (ymid - yv). The slope of lean against x,
+     c = 1 / (ymid - yv), is the same c as in the "tilt" law above when the wall faces the camera,
+     so the edges say how much of a change in period the camera angle can explain.
+     Returns {lines, c, se, ok}; c and se are per full-resolution pixel. */
+  AF.uprightEdges = function (gFull, w, h) {
+    var d = AF.downscale(gFull, w, h, 720), W = d.w, H = d.h, S = d.s, g = AF.blur(d.g, W, H, 1);
+    var gx = new Float32Array(W * H), x, y, i, THR = 7, ym = H / 2;
+    for (y = 0; y < H; y++) for (x = 1; x < W - 1; x++) { i = y * W + x; gx[i] = g[i + 1] - g[i - 1]; }
+    var cand = [], NA = 35, DA = 0.004;
+    for (var ai = -NA; ai <= NA; ai++) {
+      var a = ai * DA;
+      for (var xm = 3; xm < W - 3; xm++) {
+        var pos = 0, neg = 0;
+        for (y = 2; y < H - 2; y += 2) {
+          x = Math.round(xm + a * (y - ym));
+          if (x < 1 || x >= W - 1) continue;
+          var v = gx[y * W + x];
+          if (v > THR) pos++; else if (v < -THR) neg++;
+        }
+        var sup = Math.max(pos, neg) / ((H - 4) / 2);
+        if (sup >= 0.4) cand.push({ x: xm, a: a, sup: sup, sign: pos >= neg ? 1 : -1 });
+      }
+    }
+    cand.sort(function (p, q) { return q.sup - p.sup; });
+    var lines = [];
+    cand.forEach(function (c) {
+      if (lines.length >= 12 || lines.some(function (l) { return Math.abs(l.x0 - c.x) <= 6; })) return;
+      // sub-pixel edge position row by row, then a straight-line fit with outliers dropped
+      var px = [], py = [];
+      for (y = 2; y < H - 2; y++) {
+        var xc = Math.round(c.x + c.a * (y - ym)), bx = -1, bv = THR;
+        for (x = Math.max(1, xc - 2); x <= Math.min(W - 2, xc + 2); x++) { var vv = c.sign * gx[y * W + x]; if (vv > bv) { bv = vv; bx = x; } }
+        if (bx < 1 || bx > W - 2) continue;
+        var l = c.sign * gx[y * W + bx - 1], r = c.sign * gx[y * W + bx + 1], den = l - 2 * bv + r;
+        px.push(bx + (den < 0 ? 0.5 * (l - r) / den : 0)); py.push(y - ym);
+      }
+      var keep = px.map(function () { return true; }), A = c.a, B = c.x, res = 9;
+      for (var pass = 0; pass < 3; pass++) {
+        var n = 0, sy = 0, sx = 0, syy = 0, sxy = 0;
+        for (i = 0; i < px.length; i++) if (keep[i]) { n++; sy += py[i]; sx += px[i]; syy += py[i] * py[i]; sxy += py[i] * px[i]; }
+        var dd = n * syy - sy * sy;
+        if (n < 0.3 * H || dd <= 0) return;
+        A = (n * sxy - sy * sx) / dd; B = (sx - A * sy) / n;
+        var ss = 0;
+        for (i = 0; i < px.length; i++) if (keep[i]) { var e = px[i] - B - A * py[i]; ss += e * e; }
+        res = Math.sqrt(ss / n);
+        for (i = 0; i < px.length; i++) keep[i] = Math.abs(px[i] - B - A * py[i]) < Math.max(0.8, 2.5 * res);
+      }
+      if (res > 0.7) return;                               // not straight: a limb, a cable, a curtain fold
+      var ys = py.filter(function (_, j) { return keep[j]; });
+      lines.push({ x0: c.x, x: B * S, lean: A, support: c.sup, res: res, ya: (ys[0] + ym) * S, yb: (ys[ys.length - 1] + ym) * S });
+    });
+    var out = { lines: lines, c: null, se: null, ok: false };
+    if (lines.length < 3) return out;                       // two lines always agree with some tilt
+    var mx = 0, ml = 0, sxx = 0, sxl = 0, m = lines.length;
+    lines.forEach(function (l) { mx += l.x; ml += l.lean; }); mx /= m; ml /= m;
+    lines.forEach(function (l) { sxx += (l.x - mx) * (l.x - mx); sxl += (l.x - mx) * (l.lean - ml); });
+    if (Math.sqrt(sxx / m) < 0.04 * w) return out;          // all in one place: no leverage
+    var c1 = sxl / sxx, rs = 0;
+    lines.forEach(function (l) { var e = l.lean - ml - c1 * (l.x - mx); rs += e * e; });
+    // upright things are not perfectly plumb, and two lines always fit exactly: keep a floor
+    var sig = Math.max(0.003, m > 2 ? Math.sqrt(rs / (m - 2)) : 0);
+    out.c = c1; out.se = sig / Math.sqrt(sxx); out.ok = true;
+    return out;
+  };
+
+  /* ---------- everything the background alone can say ---------- */
+  /* g: grey frame, gb: the same lightly blurred. body (optional): rows {sh, hip, K} of shoulders,
+     hips and knees; a boundary outside chest..knee is not believed when a body is known.
+     Returns {how: "ramp" | "step" | null, y0, ramp, k, n, adopt, tilt: {c, growth, seen, from}, prof, step, edges}.
+       step  a jump in period at one row (findBoundary), the long-standing path
+       ramp  no clean jump, but the period rises steadily over a stretch of rows (scaleProfile)
+     tilt.c is the camera tilt that was separated out first (0 = none); pass it to
+     findRepeatCandidates so that a factor read across the boundary is not inflated by it. */
+  AF.autoBackground = function (g, gb, w, h, body) {
+    function inBody(y) { return !body || (y >= body.sh + 0.3 * (body.hip - body.sh) && y <= body.K); }
+    // on a tall frame the search for a jump runs on a reduced copy (it is by far the slowest step)
+    var d = AF.downscale(gb, w, h, 1300), cl = (d.s === 1 ? AF.findBoundary(gb, w, h) : AF.findBoundary(AF.blur(d.g, d.w, d.h, 1), d.w, d.h)) || [];
+    if (d.s > 1) cl.forEach(function (c) { c.y0 *= d.s; c.yLo *= d.s; c.yHi *= d.s; c.strips.forEach(function (t) { t.x0 *= d.s; t.x1 *= d.s; t.y0 *= d.s; t.pA *= d.s; t.pB *= d.s; }); });
+    var strong = cl.filter(function (c) { return c.strong && inBody(c.y0); });
+    var ed = AF.uprightEdges(g, w, h);
+    var prof = AF.scaleProfile(gb, w, h, ed.ok ? [ed.c - 2 * ed.se, ed.c, ed.c + 2 * ed.se] : null);
+    var out = { how: null, y0: null, ramp: 0, k: null, n: 0, adopt: false, prof: prof, step: null, edges: ed,
+                tilt: { c: 0, growth: 1, seen: false, from: ed.ok ? "edges" : "texture" } };
+    if (prof) {
+      // a tilt counts when the edges measure one clearly, or, without edges, when the texture shows one
+      // (the texture only counts when tilt alone explains it: with a filter term in the fit, the
+      //  split between the two is too uncertain to correct a jump with)
+      var c = ed.ok ? (Math.abs(ed.c) > 2 * ed.se ? ed.c : 0) : prof.model === "none" && prof.tilted ? prof.tilt.c : prof.model === "ramp" ? prof.c : 0;
+      var gr = AF.tiltGrowth(c, 0, h, h);
+      if (Math.abs(gr - 1) >= 0.04) { out.tilt.c = c; out.tilt.growth = gr; out.tilt.seen = true; }
+    }
+    // A tilted camera makes the period creep up all the way down, and the jump finder then reports
+    // small "jumps" wherever its rounding flips. Keep the first jump that is still there once the
+    // tilt is taken out of the comparison.
+    var pick = strong[0] || null;
+    if (out.tilt.seen) {
+      pick = null;
+      for (var si = 0; si < strong.length && !pick; si++) {
+        var rc = AF.findRepeatCandidates(gb, w, h, strong[si].y0, h, 0, out.tilt.c);
+        if (rc.consensus && rc.consensus.n >= 2 && rc.consensus.k >= 1.05) pick = strong[si];
+      }
+    }
+    out.step = pick;
+    var ramp = !!prof && prof.model === "ramp" && (!body || (prof.y0 >= body.sh && prof.y0 <= body.K));
+    // A jump reported inside the ramp, no bigger than the ramp itself, is the ramp seen through a
+    // coarse window. A jump elsewhere, or a much bigger one, is a real hard edge: keep it.
+    if (ramp && pick && !(pick.y0 > prof.y0 - prof.wh && pick.y0 < prof.y0 + prof.rampLen + prof.wh && pick.k <= prof.k * 1.06)) ramp = false;
+    // a ramp whose end was not seen gives way to a jump when there is one
+    if (ramp && prof.open && pick) ramp = false;
+    if (ramp) { out.how = "ramp"; out.y0 = prof.y0; out.ramp = prof.rampLen; out.k = prof.k; out.n = prof.strips; out.kLo = prof.kLo; out.kHi = prof.kHi; out.open = !!prof.open; }
+    else if (pick) { out.how = "step"; out.y0 = pick.y0; out.k = pick.k; out.n = pick.n; }
+    // Not adopted on its own authority: a ramp read only up to where the texture ends (a lower
+    // bound), and a jump under a tilt that no upright edge confirms (the factor can be 10% off).
+    out.adopt = !!out.how && !(out.how === "ramp" && out.open) && !(out.how === "step" && out.tilt.seen && !ed.ok);
+    out.why = !out.how || out.adopt ? "" : out.how === "ramp" ? "open" : "tilt-unconfirmed";
+    return out;
   };
 
   /* ---------- cue 2: shapes that should be square / circular ---------- */
@@ -693,18 +1077,23 @@ input[type=file] { display: none; }
     var top = box.y, bot = box.y + box.h, tr = trueRatio || 1, kx = p.kx || 1;
     var inBand = Math.max(0, Math.min(bot, p.y1) - Math.max(top, p.y0)), outBand = box.h - inBand;
     if (inBand < 0.15 * box.h) return { k: null, frac: inBand / box.h };
-    // true width = box.w / kx ; true height = outBand + inBand / k = true width * tr
-    var need = (box.w / kx) * tr - outBand;
-    if (need <= 0) return { k: null, frac: inBand / box.h };
-    return { k: inBand / need, frac: inBand / box.h };
+    // true width = box.w / kx ; true height (stretch undone with factor k) = true width * tr
+    var want = (box.w / kx) * tr;
+    if (want - outBand <= 0) return { k: null, frac: inBand / box.h };
+    if (!rampOf(p)) return { k: inBand / (want - outBand), frac: inBand / box.h };
+    function trueH(k) { var q = { y0: p.y0, y1: p.y1, k: k, ramp: p.ramp }; return AF.unmapY(bot, q) - AF.unmapY(top, q); }
+    var lo = 0.3, hi = 6;                                   // trueH falls as k grows
+    if (trueH(lo) < want || trueH(hi) > want) return { k: null, frac: inBand / box.h };
+    for (var i = 0; i < 60; i++) { var m = 0.5 * (lo + hi); if (trueH(m) > want) lo = m; else hi = m; }
+    return { k: 0.5 * (lo + hi), frac: inBand / box.h };
   };
   /* Whole-frame horizontal squeeze. kx = width now / true width (0.9 = squeezed to 90%).
      Nothing inside the frame escaped it, so only an object of known shape can measure it:
      kx = (width now * trueRatio) / true height, the height taken with the vertical stretch undone. */
   AF.kxFromBox = function (box, p, trueRatio) {
     var top = box.y, bot = box.y + box.h, tr = trueRatio || 1;
-    var inBand = Math.max(0, Math.min(bot, p.y1) - Math.max(top, p.y0)), outBand = box.h - inBand;
-    var trueH = outBand + inBand / (p.k || 1);
+    var inBand = Math.max(0, Math.min(bot, p.y1) - Math.max(top, p.y0));
+    var q = { y0: p.y0, y1: p.y1, k: p.k || 1, ramp: p.ramp }, trueH = AF.unmapY(bot, q) - AF.unmapY(top, q);
     if (trueH <= 0) return { kx: null, frac: inBand / box.h };
     return { kx: (box.w * tr) / trueH, frac: inBand / box.h };
   };
@@ -719,7 +1108,7 @@ input[type=file] { display: none; }
   /* pts: stretched-image y of head top (H), joint (J = knee or crotch), sole (S). */
   AF.kFromBody = function (H, J, S, p, r) {
     function ratio(k) {
-      var q = { y0: p.y0, y1: p.y1, k: k };
+      var q = { y0: p.y0, y1: p.y1, k: k, ramp: p.ramp };
       var h = AF.unmapY(H, q), j = AF.unmapY(J, q), s = AF.unmapY(S, q);
       return (s - j) / (s - h);
     }
@@ -760,7 +1149,7 @@ input[type=file] { display: none; }
   var MARK = "#ff4a2b", MARK2 = "#ffd23f", CAND = "#4fd1ff";
   var S = {
     w: 0, h: 0, kind: "none", name: "还原尺", isDemo: false,
-    p: { y0: 0, y1: 0, k: 1, kx: 1 }, toBottom: true, adoptedX: null,
+    p: { y0: 0, y1: 0, k: 1, kx: 1, ramp: 0 }, tiltC: 0, toBottom: true, adoptedX: null,
     mode: "idle", ev: [], cands: [], adopted: null, hover: null,
     draft: null, pts: [], gapA: null, drag: null, seq: 0, gray: null, ds: 1, recording: false, stopRec: null,
     bw: 0, bh: 0, crop: null, track: false, trackOff: 0, busy: false
@@ -797,7 +1186,7 @@ input[type=file] { display: none; }
 
   /* ------------------------------------------------------------ evidence */
   function solveGap(A, B, p) {
-    function len(s, k) { var q = { y0: p.y0, y1: p.y1, k: k }; return AF.unmapY(s.yb, q) - AF.unmapY(s.ya, q); }
+    function len(s, k) { var q = { y0: p.y0, y1: p.y1, k: k, ramp: p.ramp }; return AF.unmapY(s.yb, q) - AF.unmapY(s.ya, q); }
     function f(k) { return len(B, k) - len(A, k); }
     var lo = 0.4, hi = 4, flo = f(lo), fhi = f(hi);
     if (flo * fhi > 0) return null;
@@ -836,12 +1225,18 @@ input[type=file] { display: none; }
         (e.auto ? "点是模型估的：先按估计倍数还原、再重新识别，反复" + (e.rounds ? " " + e.rounds + " 轮" : "") + "到读数稳定" + (e.direct != null ? "（不还原直接读是 ×" + fmt(e.direct) + "）" : "") + "。" +
           (e.multi ? "视频里看了 " + e.multi.frames + " 帧，其中 " + e.multi.used + " 帧读出了结果，各帧读数 " + fmt(e.multi.lo) + "–" + fmt(e.multi.hi) + "，这里显示的是居中的一帧。" : "") +
           (e.posture ? "这一帧" + e.posture + "，读数不可靠。" : "") + "三个点可以拖动修正。" : "三个点可以拖动微调。");
+    } else if (e.kind === "profile") {
+      e.title = "逐行间距（" + e.n + " 条竖带）";
+      e.detail = "等距的东西，间距从第 " + e.y0At + " 行开始变大，到第 " + (e.y0At + e.rampAt) + " 行达到 ×" + fmt(e.k);
+      e.lo = e.rlo; e.hi = e.rhi;
+      e.note = "没有一个突变的位置，是逐渐拉长的。" + e.tiltNote + (Math.abs(e.y0At - p.y0) > 4 || Math.abs(e.rampAt - p.ramp) > 4 ? "分界线或渐变段动过了，倍数是按原来的位置量的。" : "");
     } else if (e.kind === "repeat") {
       e.title = "重复结构（" + e.n + " 条竖带" + (e.n > 1 ? "一致" : "") + "）";
       e.detail = "横向 " + e.x0 + "–" + e.x1 + " px：上方周期 " + fmt(e.strips[0].pUp, 1) + " px，下方 " + fmt(e.strips[0].pDown, 1) + " px";
       if (e.n > 1) { e.lo = e.rlo; e.hi = e.rhi; }
       if (e.n === 1) e.note = "只有一条竖带，没有别的印证，谨慎采用。";
       if (Math.abs(e.k - 1) < 0.03) e.note = "上下周期相同：可能没拉伸，也可能只是视频压缩的块网格。";
+      if (e.tiltC) e.note = "已扣掉镜头倾斜造成的变化。" + e.note;
       if (Math.abs(e.y0At - p.y0) > 4) e.note = "分界线动过了，重新找一次更准。";
     }
   }
@@ -853,7 +1248,9 @@ input[type=file] { display: none; }
   function adopt(id) {
     var e = S.ev.filter(function (x) { return x.id === id; })[0];
     if (!e || e.k == null) return;
-    if (e.axis === "x") { S.adoptedX = id; setKx(e.k, true); } else { S.adopted = id; setK(e.k, true); }
+    if (e.axis === "x") { S.adoptedX = id; setKx(e.k, true); return; }
+    if (e.kind === "profile") { S.p.y0 = clamp(e.y0At, 1, S.p.y1 - 8); S.p.ramp = clamp(e.rampAt, 0, S.p.y1 - S.p.y0); }
+    S.adopted = id; setK(e.k, true);
   }
   function setK(k, keepAdopted) {
     S.p.k = clamp(k, 0.4, 4);
@@ -870,7 +1267,7 @@ input[type=file] { display: none; }
     for (var pass = 0; pass < 2; pass++) {
       S.ev.forEach(computeEv);
       var a = S.ev.filter(function (x) { return x.id === S.adopted; })[0];
-      if (a && a.k != null && a.kind !== "repeat" && a.axis !== "x") S.p.k = clamp(a.k, 0.4, 4);
+      if (a && a.k != null && a.kind !== "repeat" && a.kind !== "profile" && a.axis !== "x") S.p.k = clamp(a.k, 0.4, 4);
       var ax = S.ev.filter(function (x) { return x.id === S.adoptedX; })[0];
       if (ax && ax.k != null && ax.axis === "x") S.p.kx = clamp(ax.k, 0.5, 1.6);
     }
@@ -882,11 +1279,17 @@ input[type=file] { display: none; }
   /* ------------------------------------------------------------ drawing */
   /* Paint the frame with the vertical band squeezed back by p.k, into a canvas cw pixels wide. */
   function paintRestored(ctx, cw, p) {
-    var w = S.w, h = S.h, bh = (p.y1 - p.y0) / p.k;
+    var w = S.w, h = S.h, r = Math.max(0, Math.min(p.ramp || 0, p.y1 - p.y0)), ya = p.y0 + r, dy = AF.unmapY(ya, p);
     ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = "high";
     if (p.y0 > 0) ctx.drawImage(src, 0, 0, w, p.y0, 0, 0, cw, p.y0);
-    if (p.y1 > p.y0) ctx.drawImage(src, 0, p.y0, w, p.y1 - p.y0, 0, p.y0, cw, bh + (p.y1 < h ? 0.6 : 0));
-    if (p.y1 < h) ctx.drawImage(src, 0, p.y1, w, h - p.y1, 0, p.y0 + bh, cw, h - p.y1);
+    // the fade-in part: thin slices, each squeezed by its own factor
+    for (var y = p.y0; y < ya; ) {
+      var y2 = Math.min(ya, y + 4), d1 = AF.unmapY(y, p), d2 = AF.unmapY(y2, p);
+      ctx.drawImage(src, 0, y, w, y2 - y, 0, d1, cw, d2 - d1 + 0.5); y = y2;
+    }
+    var bh = (p.y1 - ya) / p.k;
+    if (p.y1 > ya) ctx.drawImage(src, 0, ya, w, p.y1 - ya, 0, dy, cw, bh + (p.y1 < h ? 0.6 : 0));
+    if (p.y1 < h) ctx.drawImage(src, 0, p.y1, w, h - p.y1, 0, dy + bh, cw, h - p.y1);
   }
   function renderOut() {
     var p = S.p, W = Math.max(1, Math.round(S.w / p.kx)), H = Math.max(1, Math.round(AF.restoredHeight(S.h, p)));
@@ -926,6 +1329,11 @@ input[type=file] { display: none; }
           halo(vctx, function (x) { x.arc(q[0], q[1], 5 * ds, 0, 7); }, col, lw);
         });
         label(vctx, n, e.px[0] + 8 * ds, e.H, col, fs);
+      } else if (e.kind === "profile") {
+        var pk = [];
+        e.tracks.forEach(function (t) { if (pk.length < 4 && !pk.some(function (o) { return t.x0 < o.x1 + 40 && o.x0 < t.x1 + 40; })) pk.push(t); });
+        pk.forEach(function (t) { halo(vctx, function (x) { x.rect(t.x0, e.ymin, t.x1 - t.x0, e.ymax - e.ymin); }, col, lw * 0.7, [2 * ds, 3 * ds]); });
+        if (pk.length) label(vctx, n, pk[0].x0, e.ymin, col, fs);
       } else if (e.kind === "repeat") {
         var shown = [];
         e.strips.slice().sort(function (a, b) { return b.snr - a.snr; }).forEach(function (s) {
@@ -953,7 +1361,12 @@ input[type=file] { display: none; }
 
     // boundary lines on top
     halo(vctx, function (x) { x.moveTo(0, p.y0); x.lineTo(w, p.y0); }, MARK, lw * 1.2);
-    label(vctx, "分界线 " + Math.round(p.y0), w - 96 * ds, p.y0 - 3 * ds, MARK, fs);
+    label(vctx, (p.ramp > 0 ? "开始拉长 " : "分界线 ") + Math.round(p.y0), w - 96 * ds, p.y0 - 3 * ds, MARK, fs);
+    if (p.ramp > 0) {
+      var yr = Math.min(p.y1, p.y0 + p.ramp);
+      halo(vctx, function (x) { x.moveTo(0, yr); x.lineTo(w, yr); }, MARK, lw * 0.8, [3 * ds, 5 * ds]);
+      label(vctx, "拉满 " + Math.round(yr), w - 96 * ds, yr - 3 * ds, MARK, fs);
+    }
     if (!S.toBottom) {
       halo(vctx, function (x) { x.moveTo(0, p.y1); x.lineTo(w, p.y1); }, MARK, lw, [8 * ds, 5 * ds]);
       label(vctx, "拉伸到 " + Math.round(p.y1), w - 96 * ds, p.y1 - 3 * ds, MARK, fs);
@@ -974,7 +1387,7 @@ input[type=file] { display: none; }
       if (major && y > 0 && py < cssH - 6) rctx.fillText(String(Math.round(y)), cssW - 11, py);
     }
     rctx.fillStyle = MARK;
-    [S.p.y0].concat(S.toBottom ? [] : [S.p.y1]).forEach(function (yy) {
+    [S.p.y0].concat(S.p.ramp > 0 ? [Math.min(S.p.y1, S.p.y0 + S.p.ramp)] : [], S.toBottom ? [] : [S.p.y1]).forEach(function (yy) {
       var q = yy * sc; rctx.beginPath(); rctx.moveTo(cssW, q); rctx.lineTo(cssW - 8, q - 5); rctx.lineTo(cssW - 8, q + 5); rctx.closePath(); rctx.fill();
     });
   }
@@ -998,7 +1411,7 @@ input[type=file] { display: none; }
     st.textContent = a ? (a.kind === "body" ? "仅凭统计" : "有依据") : "手动";
     var pct = Math.round((p.k - 1) * 100);
     var ax = S.ev.filter(function (x) { return x.id === S.adoptedX; })[0], px = Math.round((1 - p.kx) * 100);
-    words.textContent = (Math.abs(p.k - 1) < 0.03 ? "看不出纵向拉伸" : pct > 0 ? "下半截被拉长约 " + pct + "%" : "下半截被压短约 " + (-pct) + "%") +
+    words.textContent = (Math.abs(p.k - 1) < 0.03 ? "看不出纵向拉伸" : pct > 0 ? (p.ramp > 0 ? "从第 " + Math.round(p.y0) + " 行起逐渐拉长，到第 " + Math.round(p.y0 + p.ramp) + " 行拉满，约 " + pct + "%" : "下半截被拉长约 " + pct + "%") : "下半截被压短约 " + (-pct) + "%") +
       (Math.abs(p.kx - 1) < 0.015 ? "" : px > 0 ? "；整幅被横向压窄约 " + px + "%" : "；整幅被横向拉宽约 " + (-px) + "%");
     srcEl.textContent = (a ? "来源：" + a.title + (a.lo != null ? "，区间 " + fmt(a.lo) + "–" + fmt(a.hi) : "") : "来源：纵向是手动调的，没有依据") +
       (Math.abs(p.kx - 1) < 0.015 ? "" : ax ? "；横向来自 " + ax.title : "；横向是手动调的");
@@ -1008,6 +1421,7 @@ input[type=file] { display: none; }
     $("kRange").value = p.k;
     if (document.activeElement !== $("y0Num")) $("y0Num").value = Math.round(p.y0);
     if (document.activeElement !== $("y1Num")) $("y1Num").value = Math.round(p.y1);
+    if (document.activeElement !== $("rampNum")) $("rampNum").value = Math.round(p.ramp || 0);
   }
   function render() {
     if (!S.w) return;
@@ -1039,14 +1453,15 @@ input[type=file] { display: none; }
   }
 
   /* ------------------------------------------------------------ auto scan */
-  function scan() {
+  function scan(o) {
     if (!S.w) return;
+    var gradual = S.p.ramp > 0;                       // the repeat cue then only cross-checks the ramp
     var g = getGray(), p = S.p;
     S.ev = S.ev.filter(function (e) { return e.kind !== "repeat"; });
-    var r = AF.findRepeatCandidates(g.b, S.w, S.h, Math.round(p.y0), Math.round(p.y1)), rep = null;
+    var r = AF.findRepeatCandidates(g.b, S.w, S.h, Math.round(p.y0), Math.round(p.y1), p.ramp, S.tiltC), rep = null;
     var strong = r.clusters.filter(function (c) { return c.n >= 2; }).slice(0, 3), reps = [];
-    strong.forEach(function (c) { reps.push({ kind: "repeat", k: c.k, rlo: c.lo, rhi: c.hi, n: c.n, x0: c.x0, x1: c.x1, strips: c.strips, y0At: p.y0 }); });
-    if (!reps.length && r.cands.length) { var c0 = r.cands[0]; reps.push({ kind: "repeat", k: c0.k, n: 1, x0: c0.x0, x1: c0.x1, strips: [c0], y0At: p.y0 }); }
+    strong.forEach(function (c) { reps.push({ kind: "repeat", k: c.k, rlo: c.lo, rhi: c.hi, n: c.n, x0: c.x0, x1: c.x1, strips: c.strips, y0At: p.y0, tiltC: S.tiltC }); });
+    if (!reps.length && r.cands.length) { var c0 = r.cands[0]; reps.push({ kind: "repeat", k: c0.k, n: 1, x0: c0.x0, x1: c0.x1, strips: [c0], y0At: p.y0, tiltC: S.tiltC }); }
     rep = reps[0] || null;
     var shapes = AF.findShapeCandidates(g.g, S.w, S.h, {});
     shapes.forEach(function (c) { var q = AF.kFromBox(c, p, 1).k; c.inBand = q != null; c.plaus = q != null && q > 1.03 && q < 2.4; });
@@ -1061,11 +1476,13 @@ input[type=file] { display: none; }
     var conflict = reps.length > 1;
     // identical periods above and below can be a real "no stretch" or just the codec's block grid: never auto-adopt
     var flat = rep && Math.abs(rep.k - 1) < 0.03;
-    reps.forEach(function (q) { addEv(q, !conflict && !flat && q.n > 1); });
+    var hold = o && o.hold;                              // a reason not to adopt on its own authority
+    reps.forEach(function (q) { addEv(q, !hold && !gradual && !conflict && !flat && q.n > 1); });
     var nIn = S.cands.filter(function (c) { return c.inBand; }).length, msg = [];
-    if (conflict) msg.push("重复结构给出了互相矛盾的倍数（" + reps.map(function (q) { return "×" + fmt(q.k); }).join("、") + "），画面多半是几块拼成的。先用“只留一块画面”框出被拉伸的那块，再找一次");
+    if (gradual) { if (rep) msg.push("渐变段上方和拉满之后各取一段对比，重复结构读出 ×" + fmt(rep.k) + "（" + rep.n + " 条竖带），供对照"); }
+    else if (conflict) msg.push("不同位置量出的倍数不一样（" + reps.map(function (q) { return "×" + fmt(q.k); }).join("、") + "），没有自动采用。常见原因有三个：拉伸是逐渐加大的（点“一键估计”会按逐行间距再量）、镜头有仰俯、或者画面是几块拼成的（用“只留一块画面”框出一块再找）");
     else if (flat) msg.push("重复结构上下周期相同（×" + fmt(rep.k) + "）：可能没拉伸，也可能只是视频压缩的块网格，没自动采用");
-    else if (rep) msg.push("重复结构：" + rep.n + " 条竖带，估计 ×" + fmt(rep.k) + (rep.n > 1 ? "，已采用" : "（只有一条，没自动采用）"));
+    else if (rep) msg.push("重复结构：" + rep.n + " 条竖带，估计 ×" + fmt(rep.k) + (rep.n > 1 ? (hold ? "，没自动采用：" + hold : "，已采用") : "（只有一条，没自动采用）"));
     if (S.cands.length) msg.push("形状候选 " + S.cands.length + " 个（" + nIn + " 个在拉伸带里量纵向，其余量横向），请确认哪个本来是正方形或正圆");
     if (!msg.length) msg.push("没找到可用的参照物。可以手动框选、量间距，或者用人体比例");
     hint(msg.join("；") + "。", conflict || (!rep && !nIn));
@@ -1162,13 +1579,13 @@ input[type=file] { display: none; }
   async function iterBody(first) {
     var y0 = S.p.y0, y1 = S.p.y1, k = 1, best = null, direct = null;
     for (var it = 0; it < 5; it++) {
-      var q = { y0: y0, y1: y1, k: k }, ht = Math.round(AF.restoredHeight(S.h, q)), r;
+      var q = { y0: y0, y1: y1, k: k, ramp: S.p.ramp }, ht = Math.round(AF.restoredHeight(S.h, q)), r;
       if (it === 0 && first) r = first;
       else { iterC.width = S.w; iterC.height = ht; paintRestored(iterX, S.w, q); r = await detectOn(iterC, true); }
       if (!r) break;
-      var b = bodyFromPose(r, ht), y1t = y0 + (y1 - y0) / k, kk = k;
+      var b = bodyFromPose(r, ht), y1t = AF.unmapY(y1, q), qq = q;
       var res = AF.kFromBody(b.H, b.K, b.S, { y0: y0, y1: y1t, k: 1 }, AF.PRIORS.knee.p50);
-      var back = function (y) { return y <= y0 ? y : y <= y1t ? y0 + (y - y0) * kk : y1 + (y - y1t); };
+      var back = function (y) { return AF.mapY(y, qq); };
       if (it === 0) direct = res;
       best = { H: back(b.H), K: back(b.K), S: back(b.S), hip: back(b.hip), px: b.px, ok: b.ok, why: b.why, cut: b.cut, rounds: it + 1, direct: direct };
       if (res == null) break;
@@ -1199,14 +1616,21 @@ input[type=file] { display: none; }
     await seekTo(t0); drawFrame();
     return out;
   }
-  /* Boundary suggestion: a period jump in a repeating background if there is a solid one
-     (kept only if it falls between chest and knees when a body was found); otherwise hip height. */
+  /* Boundary suggestion from the background: a jump in period at one row, or a gradual rise over a
+     stretch of rows (kept only if it falls between chest and knees when a body was found);
+     otherwise hip height. Camera tilt is separated out first. */
   function suggestBoundary(body) {
-    var g = getGray(), cl = AF.findBoundary(g.b, S.w, S.h) || [];
-    var pick = cl.filter(function (c) { return c.strong && (!body || (c.y0 >= body.sh + 0.3 * (body.hip - body.sh) && c.y0 <= body.K)); })[0];
-    if (pick) return { y0: pick.y0, how: "texture", k: pick.k, n: pick.n };
-    if (body) return { y0: body.hip, how: "pose" };
-    return null;
+    var g = getGray(), a = AF.autoBackground(g.g, g.b, S.w, S.h, body);
+    if (a.how === "ramp") return { y0: a.y0, how: "ramp", ramp: a.ramp, k: a.k, n: a.n, bg: a };
+    if (a.how === "step") return { y0: a.y0, how: "texture", k: a.k, n: a.n, bg: a };
+    if (body) return { y0: body.hip, how: "pose", bg: a };
+    return { y0: null, how: null, bg: a };
+  }
+  function tiltWords(bg) {
+    var t = bg.tilt, pct = Math.round(Math.abs(t.growth - 1) * 100), ed = bg.edges;
+    if (t.seen) return "镜头有" + (t.growth > 1 ? "仰" : "俯") + "角：等距的东西从画面顶到底会" + (t.growth > 1 ? "变大" : "变小") + "约 " + pct + "%（" + (t.from === "edges" ? "按 " + ed.lines.length + " 条竖直边的收拢算的" : "画面里竖直边不够，是按间距变化的形状估的，把握较小") + "），这部分已扣掉，不算拉伸";
+    if (bg.prof && ed.ok) return "竖直边几乎不收拢，镜头基本是平的";
+    return "";
   }
   async function autoAll() {
     if (!S.w || S.busy) return;
@@ -1216,18 +1640,32 @@ input[type=file] { display: none; }
       hint("正在分析：识别人体、找分界线、找参照物…");
       var r = await detectPose(true).catch(function () { return null; });
       await new Promise(function (res) { setTimeout(res, 30); });
-      var body = r ? bodyFromPose(r, S.h) : null, sug = suggestBoundary(body), notes = [];
-      S.ev = S.ev.filter(function (e) { return !(e.kind === "body" && e.auto); });
-      if (sug) {
-        S.p.y0 = clamp(Math.round(sug.y0), 1, S.p.y1 - 8); recomputeAll();
-        notes.push(sug.how === "texture" ? "分界线按背景周期突变定在 " + S.p.y0 + "（" + sug.n + " 条竖带一致）" : "背景里没有可靠的周期突变，分界线先按胯部粗略放在 " + S.p.y0 + "，请拖准");
+      var body = r ? bodyFromPose(r, S.h) : null, sug = suggestBoundary(body), notes = [], bg = sug.bg;
+      S.ev = S.ev.filter(function (e) { return !(e.kind === "body" && e.auto) && e.kind !== "profile"; });
+      S.tiltC = bg.tilt.seen ? bg.tilt.c : 0; S.p.ramp = 0;
+      if (sug.how) {
+        S.p.y0 = clamp(Math.round(sug.y0), 1, S.p.y1 - 8);
+        if (sug.how === "ramp") S.p.ramp = clamp(Math.round(sug.ramp), 0, S.p.y1 - S.p.y0);
+        recomputeAll();
+        notes.push(sug.how === "ramp" ? "背景里等距的东西没有突变的位置，但间距从第 " + S.p.y0 + " 行起逐渐变大，到第 " + (S.p.y0 + S.p.ramp) + " 行达到 ×" + fmt(sug.k) + "（" + sug.n + " 条竖带），按渐变拉伸处理"
+          : sug.how === "texture" ? "分界线按背景周期突变定在 " + S.p.y0 + "（" + sug.n + " 条竖带一致）" : "背景里没有可靠的周期突变，分界线先按胯部粗略放在 " + S.p.y0 + "，请拖准");
       } else notes.push("没找到分界线的线索，请手动拖");
-      scan();
+      var tw = tiltWords(bg); if (tw) notes.push(tw);
+      var hold = bg.why === "tilt-unconfirmed" ? "镜头有仰俯，画面里又没有足够的竖直边来核对，这个倍数可能偏差一成左右" : "";
+      scan({ hold: hold });
+      if (sug.how === "ramp") {
+        var pf = bg.prof;
+        addEv({ kind: "profile", k: sug.k, rlo: bg.kLo != null && bg.kHi - bg.kLo > 0.015 ? bg.kLo : null, rhi: bg.kLo != null && bg.kHi - bg.kLo > 0.015 ? bg.kHi : null,
+                n: sug.n, y0At: S.p.y0, rampAt: S.p.ramp, tracks: pf.tracks, ymin: pf.ymin, ymax: pf.ymax,
+                tiltNote: (bg.edges.ok ? "镜头仰俯已按竖直边核对过。" : "画面里竖直边不够，镜头仰俯只能按间距变化的形状来扣，把握小一些。") +
+                          (bg.open ? "背景里等距的东西到这里就没了，没看到间距停止变大的位置，所以这个倍数只是下限，实际可能更大。" : "") }, bg.adopt);
+        if (bg.open) notes.push("注意：没看到间距停止变大的位置，×" + fmt(sug.k) + " 只是下限，没有自动采用");
+      }
       var scanMsg = $("hint").textContent;
       if (body) {
         var pick = null, multi = null;
         if (S.kind === "video" && (video.duration || 0) > 3) {
-          if (sug && sug.how === "pose") {
+          if (sug.how === "pose") {
             var pre = await iterBody(r);
             for (var vp = 0; pre && vp < 2 && Math.abs(pre.hip - S.p.y0) > 10; vp++) { S.p.y0 = clamp(Math.round(pre.hip), 1, S.p.y1 - 8); recomputeAll(); pre = await iterBody(null); }
             notes[0] = "背景里没有可靠的周期突变，分界线按还原后的胯部放在 " + S.p.y0 + "，可以再拖准";
@@ -1243,7 +1681,7 @@ input[type=file] { display: none; }
         } else pick = await iterBody(r);
         // The hip found on the raw frame sits too low for the same reason the leg reads short.
         // Once the body is restored the hip is trustworthy: move a hip-based boundary there and read again.
-        if (pick && sug && sug.how === "pose" && !multi) {
+        if (pick && sug.how === "pose" && !multi) {
           for (var pass = 0; pass < 2 && Math.abs(pick.hip - S.p.y0) > 10; pass++) {
             S.p.y0 = clamp(Math.round(pick.hip), 1, S.p.y1 - 8); recomputeAll();
             var again = await iterBody(null);
@@ -1254,15 +1692,22 @@ input[type=file] { display: none; }
           scan(); scanMsg = $("hint").textContent;
         }
         if (pick) {
-          var eb = addEv({ kind: "body", auto: true, H: pick.H, J: pick.K, S: pick.S, px: pick.px, which: "knee",
-                           rounds: pick.rounds, direct: pick.direct, posture: pick.ok ? "" : pick.why, multi: multi }, false);
-          // Not adopted automatically: one person's proportions and the camera angle still decide a lot.
-          if (eb.k != null) notes.push("人体比例读数 ×" + fmt(eb.k) + "（" + fmt(eb.lo) + "–" + fmt(eb.hi) + "）" +
-            (multi ? "，取自 " + multi.used + " 帧的中位" : "") + (pick.ok || multi ? "" : "；这一帧" + pick.why + "，读数不可靠") + "；只供参考，没有自动采用");
+          var est = AF.bodyEstimate(pick.H, pick.K, pick.S, S.p, "knee").k50;
+          // A leg stretched to less than 0.75 or more than 2.2 times is not a filter anyone uses:
+          // the model put a point on the wrong thing (back view, raised arms, a prop). Do not list it.
+          if (est != null && (est < 0.75 || est > 2.2)) {
+            notes.push("人体比例读出 ×" + fmt(est) + "，这个数不合理，多半是模型把点标错了（背影、举着手、被挡住时常见），已丢弃。需要的话用“人体比例”手动点三个点");
+          } else {
+            var eb = addEv({ kind: "body", auto: true, H: pick.H, J: pick.K, S: pick.S, px: pick.px, which: "knee",
+                             rounds: pick.rounds, direct: pick.direct, posture: pick.ok ? "" : pick.why, multi: multi }, false);
+            // Not adopted automatically: one person's proportions and the camera angle still decide a lot.
+            if (eb.k != null) notes.push("人体比例读数 ×" + fmt(eb.k) + "（" + fmt(eb.lo) + "–" + fmt(eb.hi) + "）" +
+              (multi ? "，取自 " + multi.used + " 帧的中位" : "") + (pick.ok || multi ? "" : "；这一帧" + pick.why + "，读数不可靠") + "；只供参考，没有自动采用");
+          }
         } else notes.push("没识别到人体");
       } else if (Pz.state === "failed") notes.push("人体模型加载不了，人体比例请手动点三个点");
       else notes.push("没识别到人体");
-      hint(notes.join("；") + "。" + scanMsg, !sug);
+      hint(notes.join("；") + "。" + scanMsg, !sug.how);
     } catch (e) { hint("自动分析出错：" + (e && e.message || e), true); }
     S.busy = false; $("autoBtn").disabled = false;
   }
@@ -1316,6 +1761,7 @@ input[type=file] { display: none; }
     return hit;
   }
   function setY0(y) { S.p.y0 = clamp(Math.round(y), 1, S.p.y1 - 8); recomputeAll(); renderLists(); render(); }
+  function setRamp(v) { S.p.ramp = clamp(Math.round(v), 0, Math.max(0, S.p.y1 - S.p.y0)); recomputeAll(); renderLists(); render(); }
   function setY1(y) { S.p.y1 = clamp(Math.round(y), S.p.y0 + 8, S.h); recomputeAll(); renderLists(); render(); }
 
   view.addEventListener("pointerdown", function (e) {
@@ -1405,6 +1851,7 @@ input[type=file] { display: none; }
   $("kxNum").addEventListener("change", function () { var v = parseFloat(this.value); if (isFinite(v)) setKx(v); });
   $("y0Num").addEventListener("change", function () { var v = parseFloat(this.value); if (isFinite(v)) setY0(v); });
   $("y1Num").addEventListener("change", function () { var v = parseFloat(this.value); if (isFinite(v)) setY1(v); });
+  $("rampNum").addEventListener("change", function () { var v = parseFloat(this.value); if (isFinite(v)) setRamp(v); });
   $("toBottom").addEventListener("change", function () {
     S.toBottom = this.checked; $("y1Num").hidden = S.toBottom;
     S.p.y1 = S.toBottom ? S.h : Math.round(Math.min(S.h, S.p.y0 + (S.h - S.p.y0) * 0.85));
@@ -1437,7 +1884,7 @@ input[type=file] { display: none; }
   /* ------------------------------------------------------------ loading */
   function resetWork(w, h) {
     S.w = w; S.h = h; src.width = w; src.height = h;
-    S.p = { y0: Math.round(h * 0.5), y1: h, k: 1, kx: 1 }; S.adoptedX = null; S.toBottom = true; $("toBottom").checked = true; $("y1Num").hidden = true;
+    S.p = { y0: Math.round(h * 0.5), y1: h, k: 1, kx: 1, ramp: 0 }; S.tiltC = 0; S.adoptedX = null; S.toBottom = true; $("toBottom").checked = true; $("y1Num").hidden = true;
     S.ev = []; S.cands = []; S.adopted = null; S.gray = null; S.mode = "idle"; S.pts = []; S.gapA = null; S.draft = null;
     $("y0Num").max = h; $("y1Num").max = h;
     $("uncrop").hidden = !S.crop; S.track = false; $("track").checked = false;
